@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+  input,button,select,textarea{font-family:inherit}
+  input:focus,textarea:focus,select:focus{outline:none}
+  @keyframes sds-dash{to{stroke-dashoffset:-22}}
+  @keyframes sds-pulse{0%,100%{opacity:.5}50%{opacity:1}}
+  @keyframes sds-blink{0%,100%{opacity:1}50%{opacity:.25}}
+  @keyframes sds-flow{to{stroke-dashoffset:-40}}
+  @keyframes sds-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .sds-anim-flow{stroke-dasharray:5 7;animation:sds-flow .6s linear infinite}
+  .sds-anim-dash{stroke-dasharray:6 5;animation:sds-dash .5s linear infinite}
+</style>
+</helmet>
+<div style="height:100vh;width:100vw;background:#0a0b0f;color:#e6e8ee;font-family:'Inter Tight',system-ui,-apple-system,sans-serif;overflow:hidden;position:relative;-webkit-font-smoothing:antialiased">
+
+  <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+  <div style="height:100vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="height:56px;flex:none;display:flex;align-items:center;gap:16px;padding:0 22px;border-bottom:1px solid rgba(255,255,255,.07);background:rgba(17,19,24,.7)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff">S</div>
+        <span style="font-weight:600;font-size:15px;letter-spacing:-.01em">SystemDesign Studio</span>
+        <span style="font:500 10px 'JetBrains Mono',monospace;color:#818cf8;background:rgba(99,102,241,.14);padding:2px 6px;border-radius:5px;margin-left:2px">BETA</span>
+      </div>
+      <div style="flex:1;display:flex;justify-content:center">
+        <div style="width:min(420px,40vw);height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:9px;color:#7c8090;font-size:13px">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
+          Search interviews, questions, candidates…
+          <span style="margin-left:auto;font:500 10px 'JetBrains Mono',monospace;color:#5b5f6d;border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:1px 5px">⌘K</span>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9498a6" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg></div>
+        <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;color:#fff">AR</div>
+      </div>
+    </div>
+
+    <div style="flex:1;overflow-y:auto;padding:34px 44px 60px">
+      <div style="max-width:1180px;margin:0 auto">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:26px;flex-wrap:wrap;gap:16px">
+          <div>
+            <div style="font-size:26px;font-weight:600;letter-spacing:-.02em">Good afternoon, Aarav</div>
+            <div style="color:#9498a6;font-size:14px;margin-top:4px">You have 2 interviews scheduled today.</div>
+          </div>
+          <button onClick="{{ openCreateInterview }}" style="display:flex;align-items:center;gap:9px;height:40px;padding:0 18px;background:#6366f1;color:#fff;border:none;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;box-shadow:0 4px 16px rgba(99,102,241,.35)" style-hover="background:#5457e5">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+            Create interview
+          </button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:34px">
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+            <div style="padding:16px 18px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:12px">
+              <div style="font:500 12px 'Inter Tight';color:#9498a6">{{ s.label }}</div>
+              <div style="font-size:26px;font-weight:600;margin-top:6px;letter-spacing:-.02em">{{ s.value }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div style="font-size:16px;font-weight:600">Resume in progress</div>
+        </div>
+        <div onClick="{{ resume }}" style="display:flex;align-items:center;gap:18px;padding:16px 18px;background:linear-gradient(120deg,rgba(99,102,241,.14),rgba(99,102,241,.03));border:1px solid rgba(99,102,241,.28);border-radius:14px;margin-bottom:34px;cursor:pointer">
+          <div style="width:46px;height:46px;border-radius:11px;background:rgba(99,102,241,.2);display:flex;align-items:center;justify-content:center;color:#a5b4fc">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>
+          </div>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:15px">Design Twitter — Senior Backend loop</div>
+            <div style="color:#9498a6;font-size:13px;margin-top:3px">Candidate: Priya S. · 10 components placed · paused 12 min ago</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;color:#a5b4fc;font-weight:600;font-size:13px">Resume<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg></div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <div style="padding:9px 2px;margin-right:16px;font-size:14px;font-weight:600;border-bottom:2px solid #6366f1;color:#fff">Question library</div>
+          <div style="padding:9px 2px;margin-right:16px;font-size:14px;font-weight:500;color:#9498a6">Upcoming</div>
+          <div style="padding:9px 2px;font-size:14px;font-weight:500;color:#9498a6">Past interviews</div>
+          <div style="margin-left:auto;font-size:12px;color:#7c8090;padding-bottom:8px">14 presets</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:14px">
+          <sc-for list="{{ questions }}" as="q" hint-placeholder-count="8">
+            <div onClick="{{ q.open }}" style="padding:18px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:13px;cursor:pointer;transition:border-color .15s,transform .15s" style-hover="border-color:rgba(99,102,241,.5);transform:translateY(-2px)">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <div style="width:36px;height:36px;border-radius:9px;background:rgba(129,140,248,.14);display:flex;align-items:center;justify-content:center;color:#a5b4fc">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 3v18M5 7l7 4 7-4"/></svg>
+                </div>
+                <span style="font:600 10px 'JetBrains Mono',monospace;padding:3px 8px;border-radius:20px;color:{{ q.diffColor }};background:rgba(255,255,255,.05)">{{ q.diff }}</span>
+              </div>
+              <div style="font-weight:600;font-size:15px;letter-spacing:-.01em">{{ q.title }}</div>
+              <div style="color:#9498a6;font-size:12.5px;margin-top:4px;min-height:32px">{{ q.tagline }}</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">
+                <sc-for list="{{ q.topics }}" as="t" hint-placeholder-count="2">
+                  <span style="font-size:11px;color:#9498a6;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);padding:2px 8px;border-radius:6px">{{ t }}</span>
+                </sc-for>
+                <span style="font:500 11px 'JetBrains Mono',monospace;color:#7c8090;margin-left:auto;align-self:center">{{ q.dur }}m</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isCreateInterview }}">
+  <div style="height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#0a0b0f">
+    <div style="height:56px;flex:none;display:flex;align-items:center;gap:14px;padding:0 22px;border-bottom:1px solid rgba(255,255,255,.07);background:#0e1015">
+      <div onClick="{{ go }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#9498a6;font-size:13px;font-weight:500" style-hover="color:#e6e8ee"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Dashboard</div>
+      <div style="width:1px;height:20px;background:rgba(255,255,255,.09)"></div>
+      <span style="font:600 10px 'JetBrains Mono';padding:3px 8px;border-radius:20px;color:#a5b4fc;background:rgba(99,102,241,.14)">Dashboard / Create Interview / Setup</span>
+      <div style="font-size:14px;font-weight:600">Create interview</div>
+      <div style="flex:1"></div>
+      <button onClick="{{ startWorkspace }}" style="height:34px;padding:0 14px;background:transparent;color:#c5c8d2;border:1px solid rgba(255,255,255,.09);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" style-hover="background:rgba(255,255,255,.05)">Start workspace</button>
+      <button onClick="{{ generateCandidateLink }}" style="height:34px;padding:0 15px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer" style-hover="background:#5457e5">Generate candidate link</button>
+    </div>
+
+    <div style="flex:1;overflow-y:auto;padding:30px 42px 56px">
+      <div style="max-width:1180px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:24px">
+        <div>
+          <div style="font-size:26px;font-weight:600;letter-spacing:-.02em;margin-bottom:6px">Set up the interview workspace</div>
+          <div style="color:#9498a6;font-size:14px;margin-bottom:22px">Pick a system design prompt, tune controls, then generate a candidate link or start the workspace directly.</div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px">
+            <div style="padding:18px;background:#12151c;border:1px solid rgba(99,102,241,.35);border-radius:12px">
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#818cf8;margin-bottom:11px">QUESTION SOURCE</div>
+              <div style="display:flex;gap:8px;margin-bottom:14px">
+                <div style="padding:8px 11px;border-radius:8px;background:rgba(99,102,241,.16);border:1px solid rgba(99,102,241,.4);color:#c7d2fe;font-size:13px;font-weight:600">Preset</div>
+                <div style="padding:8px 11px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#9498a6;font-size:13px;font-weight:600">Custom</div>
+              </div>
+              <div style="display:grid;gap:9px">
+                <div onClick="{{ chooseTwitter }}" style="padding:11px 12px;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.32);border-radius:9px;cursor:pointer">
+                  <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:13.5px;font-weight:600">Design Twitter</span><span style="font:600 10px 'JetBrains Mono';color:#fb7185">HARD</span></div>
+                  <div style="font-size:12px;color:#9498a6;margin-top:4px">Timelines, fan-out, caching - 45m</div>
+                </div>
+                <div onClick="{{ choosePayment }}" style="padding:11px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:9px;cursor:pointer" style-hover="border-color:rgba(99,102,241,.35)">
+                  <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:13.5px;font-weight:600">Design Payment System</span><span style="font:600 10px 'JetBrains Mono';color:#fb7185">HARD</span></div>
+                  <div style="font-size:12px;color:#9498a6;margin-top:4px">Idempotency, ledger, consistency - 50m</div>
+                </div>
+                <div onClick="{{ chooseTinyurl }}" style="padding:11px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:9px;cursor:pointer" style-hover="border-color:rgba(99,102,241,.35)">
+                  <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:13.5px;font-weight:600">Design TinyURL</span><span style="font:600 10px 'JetBrains Mono';color:#34d399">EASY</span></div>
+                  <div style="font-size:12px;color:#9498a6;margin-top:4px">Hashing, KV store, redirects - 30m</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="padding:18px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:12px">
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin-bottom:11px">CUSTOM PROMPT</div>
+              <textarea placeholder="Paste or write a custom system design question..." style="width:100%;height:134px;resize:none;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:9px;padding:11px;color:#e6e8ee;font-size:13px;line-height:1.5"></textarea>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+                <div><label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:block">DIFFICULTY</label><select style="width:100%;height:34px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 8px;color:#e6e8ee;font-size:13px"><option>Hard</option><option>Medium</option><option>Easy</option></select></div>
+                <div><label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:block">DURATION</label><select style="width:100%;height:34px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 8px;color:#e6e8ee;font-size:13px"><option>45 min</option><option>30 min</option><option>60 min</option></select></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div style="padding:18px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:12px">
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin-bottom:12px">Interviewer controls</div>
+              <div style="display:grid;gap:10px">
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Allow candidate editing<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Enable diagnostics during interview<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Hide health score from candidate<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Enable failure injection<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">AI hints for interviewer only<input type="checkbox" checked style="accent-color:#6366f1"></label>
+              </div>
+            </div>
+
+            <div style="padding:18px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:12px">
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin-bottom:12px">Permissions</div>
+              <div style="display:grid;gap:10px">
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Candidate can view question<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Candidate can edit canvas<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Candidate cannot view scorecard<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Interviewer can inject scenarios<input type="checkbox" checked style="accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#c5c8d2">Panel can view submitted review<input type="checkbox" checked style="accent-color:#6366f1"></label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="position:sticky;top:20px;align-self:start;padding:18px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:12px">
+          <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin-bottom:12px">SESSION SUMMARY</div>
+          <div style="font-size:18px;font-weight:600;letter-spacing:-.01em;margin-bottom:4px">{{ setupQuestionTitle }}</div>
+          <div style="font-size:12.5px;color:#9498a6;margin-bottom:16px">Senior Backend loop - 45 minutes</div>
+          <div style="display:grid;gap:9px;margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;font-size:12.5px"><span style="color:#9498a6">Candidate</span><span style="color:#e6e8ee;font-weight:600">Priya S.</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px"><span style="color:#9498a6">Diagnostics</span><span style="color:#34d399;font-weight:600">Enabled</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px"><span style="color:#9498a6">AI hints</span><span style="color:#a5b4fc;font-weight:600">Interviewer only</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px"><span style="color:#9498a6">Failure injection</span><span style="color:#fbbf24;font-weight:600">Allowed</span></div>
+          </div>
+          <button onClick="{{ generateCandidateLink }}" style="width:100%;height:38px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer;margin-bottom:10px" style-hover="background:#5457e5">Generate candidate link</button>
+          <button onClick="{{ startWorkspace }}" style="width:100%;height:38px;background:rgba(255,255,255,.04);color:#c5c8d2;border:1px solid rgba(255,255,255,.09);border-radius:8px;font-weight:600;font-size:13px;cursor:pointer" style-hover="background:rgba(255,255,255,.06)">Start workspace</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isLinkGenerated }}">
+  <div style="height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#0a0b0f">
+    <div style="height:56px;flex:none;display:flex;align-items:center;gap:14px;padding:0 22px;border-bottom:1px solid rgba(255,255,255,.07);background:#0e1015">
+      <div onClick="{{ openCreateInterview }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#9498a6;font-size:13px;font-weight:500" style-hover="color:#e6e8ee"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Setup</div>
+      <div style="width:1px;height:20px;background:rgba(255,255,255,.09)"></div>
+      <span style="font:600 10px 'JetBrains Mono';padding:3px 8px;border-radius:20px;color:#34d399;background:rgba(52,211,153,.14)">Dashboard / Create Interview / Link Generated</span>
+      <div style="font-size:14px;font-weight:600">Candidate link ready</div>
+      <div style="flex:1"></div>
+      <button onClick="{{ startWorkspace }}" style="height:34px;padding:0 15px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer" style-hover="background:#5457e5">Open workspace</button>
+    </div>
+
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:42px">
+      <div style="width:min(720px,100%);padding:28px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.45)">
+        <div style="width:48px;height:48px;border-radius:12px;background:rgba(52,211,153,.14);display:flex;align-items:center;justify-content:center;color:#6ee7b7;margin-bottom:18px"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+        <div style="font-size:24px;font-weight:600;letter-spacing:-.02em;margin-bottom:5px">Candidate link generated</div>
+        <div style="font-size:14px;color:#9498a6;margin-bottom:20px">Share this session with the candidate, then open the workspace when they join.</div>
+        <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin-bottom:8px">CANDIDATE LINK</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 13px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:9px;margin-bottom:18px">
+          <div style="flex:1;font:500 12px 'JetBrains Mono',monospace;color:#c5c8d2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ candidateLink }}</div>
+          <button style="height:30px;padding:0 11px;background:rgba(99,102,241,.16);color:#c7d2fe;border:1px solid rgba(99,102,241,.35);border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Copy link</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:22px">
+          <div style="padding:13px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:9px"><div style="font-size:12px;color:#9498a6">Candidate</div><div style="font-size:13px;font-weight:600;margin-top:3px">Priya S.</div></div>
+          <div style="padding:13px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:9px"><div style="font-size:12px;color:#9498a6">Question</div><div style="font-size:13px;font-weight:600;margin-top:3px">{{ setupQuestionTitle }}</div></div>
+          <div style="padding:13px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:9px"><div style="font-size:12px;color:#9498a6">Status</div><div style="font-size:13px;font-weight:600;color:#34d399;margin-top:3px">Candidate joined</div></div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button onClick="{{ openCreateInterview }}" style="flex:1;height:40px;background:rgba(255,255,255,.04);color:#c5c8d2;border:1px solid rgba(255,255,255,.09);border-radius:9px;font-weight:600;font-size:13px;cursor:pointer" style-hover="background:rgba(255,255,255,.06)">Edit setup</button>
+          <button onClick="{{ startWorkspace }}" style="flex:1;height:40px;background:#6366f1;color:#fff;border:none;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer" style-hover="background:#5457e5">Start workspace</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isWorkspace }}">
+  <div style="height:100vh;display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- TOP TOOLBAR -->
+    <div style="height:54px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px 0 14px;border-bottom:1px solid rgba(255,255,255,.07);background:#0e1015;position:relative;z-index:40">
+      <div onClick="{{ go }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-right:6px">
+        <div style="width:24px;height:24px;border-radius:6px;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff">S</div>
+      </div>
+      <div style="width:1px;height:22px;background:rgba(255,255,255,.09)"></div>
+      <div style="display:flex;gap:2px">
+        <div onClick="{{ undo }}" title="Undo" style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:#9498a6" style-hover="background:rgba(255,255,255,.05)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/></svg></div>
+        <div onClick="{{ redo }}" title="Redo" style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:#9498a6" style-hover="background:rgba(255,255,255,.05)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h1"/></svg></div>
+      </div>
+      <div style="width:1px;height:22px;background:rgba(255,255,255,.09)"></div>
+      <div style="display:flex;gap:3px">
+        <div onClick="{{ toolPointer }}" title="Select / Move" style="{{ sPointer }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3l15 8-6 2-2 6z"/></svg></div>
+        <div onClick="{{ toolPan }}" title="Pan" style="{{ sPan }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11V6a1.5 1.5 0 0 1 3 0v5m0-1V5a1.5 1.5 0 0 1 3 0v6m0-1a1.5 1.5 0 0 1 3 0v4a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-3l-2.5-4a1.5 1.5 0 0 1 2.5-1.6L9 13"/></svg></div>
+        <div onClick="{{ toolConnector }}" title="Connect" style="{{ sConnector }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg></div>
+        <div onClick="{{ toolComment }}" title="Comment" style="{{ sComment }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l.8-5.5A8 8 0 1 1 21 12z"/></svg></div>
+        <div onClick="{{ toggleLatency }}" title="Latency overlay" style="{{ sLatency }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="13" r="7"/><path d="M12 13V9M12 2h4"/></svg></div>
+      </div>
+
+      <div style="flex:1"></div>
+
+      <!-- SIMULATE CLUSTER -->
+      <span style="font:600 10px 'JetBrains Mono',monospace;color:#5b5f6d;letter-spacing:.08em">SIMULATE</span>
+      <div onClick="{{ toolFailure }}" style="{{ sFailure }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 20h20L12 2z"/><path d="M12 9v5M12 17h.01"/></svg>Break</div>
+      <div style="position:relative">
+        <div onClick="{{ menuTraffic }}" style="{{ sTraffic }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h11M11 6l6 6-6 6"/><path d="M20 4v16"/></svg>{{ trafficLabel }}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></div>
+        <sc-if value="{{ menuTrafficOpen }}">
+          <div style="position:absolute;top:40px;right:0;width:190px;background:#12151c;border:1px solid rgba(255,255,255,.1);border-radius:11px;padding:6px;box-shadow:0 16px 40px rgba(0,0,0,.6);z-index:60;animation:sds-in .12s ease">
+            <div style="font-size:11px;color:#7c8090;padding:6px 8px 4px">Multiply live traffic</div>
+            <div onClick="{{ traffic100 }}" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:500" style-hover="background:rgba(245,158,11,.14)">Traffic ×100<span style="color:#7c8090;font:500 11px 'JetBrains Mono'">12M RPS</span></div>
+            <div onClick="{{ traffic1000 }}" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:500" style-hover="background:rgba(245,158,11,.14)">Traffic ×1000<span style="color:#7c8090;font:500 11px 'JetBrains Mono'">120M RPS</span></div>
+            <div onClick="{{ traffic10000 }}" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:500" style-hover="background:rgba(245,158,11,.14)">Traffic ×10000<span style="color:#7c8090;font:500 11px 'JetBrains Mono'">1.2B RPS</span></div>
+          </div>
+        </sc-if>
+      </div>
+      <div style="position:relative">
+        <div onClick="{{ menuScale }}" style="{{ sScale }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg>Scale<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></div>
+        <sc-if value="{{ menuScaleOpen }}">
+          <div style="position:absolute;top:40px;right:0;width:250px;background:#12151c;border:1px solid rgba(255,255,255,.1);border-radius:11px;padding:6px;box-shadow:0 16px 40px rgba(0,0,0,.6);z-index:60;animation:sds-in .12s ease">
+            <div style="font-size:11px;color:#7c8090;padding:6px 8px 4px">Introduce a constraint</div>
+            <sc-for list="{{ constraintPresets }}" as="cp" hint-placeholder-count="5">
+              <div onClick="{{ cp.add }}" style="padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px" style-hover="background:rgba(99,102,241,.14)"><span style="color:#818cf8">+</span>{{ cp.text }}</div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+      <div style="position:relative">
+        <div onClick="{{ menuInject }}" style="{{ sInject }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg>Inject<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></div>
+        <sc-if value="{{ menuInjectOpen }}">
+          <div style="position:absolute;top:40px;right:0;width:232px;background:#12151c;border:1px solid rgba(255,255,255,.1);border-radius:11px;padding:6px;box-shadow:0 16px 40px rgba(0,0,0,.6);z-index:60;animation:sds-in .12s ease;max-height:340px;overflow-y:auto">
+            <div style="font-size:11px;color:#7c8090;padding:6px 8px 4px">Inject a failure or event</div>
+            <sc-for list="{{ scenarios }}" as="sn" hint-placeholder-count="6">
+              <div onClick="{{ sn.run }}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:500" style-hover="background:rgba(239,68,68,.13)"><span style="color:#fb7185;flex:none;display:flex"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="6"/></svg></span>{{ sn.label }}</div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+      <div onClick="{{ resetSim }}" title="Reset simulation" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;color:#9498a6" style-hover="background:rgba(255,255,255,.05)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></div>
+
+      <div style="flex:1"></div>
+
+      <!-- ZOOM -->
+      <div style="display:flex;align-items:center;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;height:32px">
+        <div onClick="{{ zoomOut }}" style="width:30px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#c5c8d2;font-size:16px">−</div>
+        <div onClick="{{ resetView }}" style="min-width:44px;text-align:center;font:500 12px 'JetBrains Mono',monospace;color:#c5c8d2;cursor:pointer">{{ zoom }}%</div>
+        <div onClick="{{ zoomIn }}" style="width:30px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#c5c8d2;font-size:15px">+</div>
+      </div>
+      <div onClick="{{ toggleAI }}" title="AI assistant" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;border:1px solid rgba(255,255,255,.09);color:#a5b4fc" style-hover="background:rgba(99,102,241,.14)"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/></svg></div>
+      <button onClick="{{ enterReview }}" style="display:flex;align-items:center;gap:7px;height:34px;padding:0 15px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer" style-hover="background:#5457e5">Finish &amp; review</button>
+    </div>
+
+    <!-- MIDDLE -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- LEFT PALETTE -->
+      <div style="width:246px;flex:none;border-right:1px solid rgba(255,255,255,.07);background:#0e1015;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:13px 14px 10px;flex:none">
+          <div style="font-size:13px;font-weight:600;margin-bottom:9px">Components</div>
+          <div style="height:32px;display:flex;align-items:center;gap:7px;padding:0 10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;color:#7c8090;font-size:12.5px">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>Filter…
+          </div>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:0 8px 20px">
+          <sc-for list="{{ palette }}" as="grp" hint-placeholder-count="6">
+            <div style="margin-top:12px">
+              <div style="display:flex;align-items:center;gap:7px;padding:0 6px 6px">
+                <span style="width:7px;height:7px;border-radius:50%;background:{{ grp.color }}"></span>
+                <span style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#7c8090;text-transform:uppercase">{{ grp.cat }}</span>
+              </div>
+              <sc-for list="{{ grp.items }}" as="it" hint-placeholder-count="4">
+                <div onPointerDown="{{ it.onDown }}" style="display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:8px;cursor:grab;border:1px solid transparent" style-hover="background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.08)">
+                  <span style="width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:{{ it.color }};background:{{ it.color }}1f;flex:none">{{ it.iconEl }}</span>
+                  <span style="font-size:12.5px;font-weight:500;color:#c5c8d2">{{ it.name }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- CANVAS -->
+      <div ref="{{ canvasRef }}" onPointerDown="{{ onCanvasDown }}" style="flex:1;position:relative;overflow:hidden;background-color:#0a0b0f;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:22px 22px;cursor:{{ canvasCursor }}">
+
+        <!-- QUESTION PANEL -->
+        <sc-if value="{{ questionOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;top:14px;left:14px;width:310px;max-height:calc(100% - 28px);z-index:20;background:rgba(14,16,21,.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.09);border-radius:13px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5)">
+            <div style="display:flex;align-items:center;gap:8px;padding:13px 14px;border-bottom:1px solid rgba(255,255,255,.07)">
+              <span style="font:600 10px 'JetBrains Mono';padding:2px 7px;border-radius:20px;color:{{ curDiffColor }};background:rgba(255,255,255,.05)">{{ curDiff }}</span>
+              <span style="font-size:14px;font-weight:600;flex:1">{{ curTitle }}</span>
+              <div onClick="{{ toggleQ }}" style="cursor:pointer;color:#7c8090;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px" style-hover="background:rgba(255,255,255,.06)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16"/></svg></div>
+            </div>
+            <div style="overflow-y:auto;padding:14px">
+              <div style="font-size:13px;line-height:1.55;color:#c5c8d2">{{ qspec.statement }}</div>
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#818cf8;margin:16px 0 7px">FUNCTIONAL</div>
+              <sc-for list="{{ qspec.functional }}" as="f" hint-placeholder-count="4"><div style="display:flex;gap:8px;font-size:12.5px;line-height:1.5;color:#b3b7c2;margin-bottom:6px"><span style="color:#34d399;flex:none">✓</span>{{ f }}</div></sc-for>
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#818cf8;margin:16px 0 7px">NON-FUNCTIONAL</div>
+              <sc-for list="{{ qspec.nonFunctional }}" as="f" hint-placeholder-count="4"><div style="display:flex;gap:8px;font-size:12.5px;line-height:1.5;color:#b3b7c2;margin-bottom:6px"><span style="color:#818cf8;flex:none">•</span>{{ f }}</div></sc-for>
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#818cf8;margin:16px 0 7px">SCALE ASSUMPTIONS</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                <sc-for list="{{ qspec.scale }}" as="s" hint-placeholder-count="4"><span style="font:500 11px 'JetBrains Mono';color:#c5c8d2;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07);padding:3px 8px;border-radius:6px">{{ s }}</span></sc-for>
+              </div>
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#fb7185;margin:16px 0 7px">FOLLOW-UPS</div>
+              <sc-for list="{{ qspec.followups }}" as="f" hint-placeholder-count="3"><div style="display:flex;gap:8px;font-size:12.5px;line-height:1.5;color:#b3b7c2;margin-bottom:6px"><span style="color:#fb7185;flex:none">?</span>{{ f }}</div></sc-for>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ questionClosed }}">
+          <div onClick="{{ toggleQ }}" style="position:absolute;top:14px;left:14px;z-index:20;display:flex;align-items:center;gap:8px;padding:9px 13px;background:rgba(14,16,21,.92);border:1px solid rgba(255,255,255,.09);border-radius:10px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.4)" style-hover="border-color:rgba(99,102,241,.4)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a5b4fc" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            <span style="font-size:13px;font-weight:600">{{ curTitle }}</span>
+          </div>
+        </sc-if>
+
+        <!-- CONSTRAINT CARDS -->
+        <div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:22;display:flex;gap:10px;flex-wrap:wrap;justify-content:center;max-width:60%">
+          <sc-for list="{{ constraints }}" as="k" hint-placeholder-count="0">
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:linear-gradient(120deg,rgba(99,102,241,.22),rgba(99,102,241,.08));border:1px solid rgba(129,140,248,.45);border-radius:11px;box-shadow:0 8px 24px rgba(0,0,0,.4);animation:sds-in .18s ease">
+              <span style="width:26px;height:26px;border-radius:7px;background:rgba(129,140,248,.25);display:flex;align-items:center;justify-content:center;color:#c7d2fe;flex:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span>
+              <span style="font-size:13px;font-weight:600;white-space:nowrap">{{ k.text }}</span>
+              <span onClick="{{ k.remove }}" style="cursor:pointer;color:#818cf8;font-size:16px;line-height:1">×</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- CANVAS LAYER -->
+        <div style="{{ layerStyle }}">
+          <svg style="position:absolute;top:0;left:0;width:3000px;height:2200px;overflow:visible;pointer-events:none">
+            <defs><marker id="sds-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"></path></marker></defs>
+            <sc-for list="{{ edges }}" as="e" hint-placeholder-count="6">
+              <path d="{{ e.d }}" fill="none" stroke="{{ e.stroke }}" stroke-width="2" marker-end="url(#sds-arrow)" class="{{ e.cls }}" style="pointer-events:stroke;cursor:pointer" onClick="{{ e.onClick }}"></path>
+            </sc-for>
+          </svg>
+          <sc-for list="{{ edges }}" as="e" hint-placeholder-count="4">
+            <div style="{{ e.chipStyle }}">{{ e.label }}</div>
+          </sc-for>
+          <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="6">
+            <div style="{{ n.style }}" onPointerDown="{{ n.onDown }}">
+              <div style="{{ n.tileStyle }}">{{ n.iconEl }}</div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#e6e8ee">{{ n.name }}</div>
+                <div style="font:500 10px 'JetBrains Mono',monospace;color:#7c8090">{{ n.cat }}</div>
+              </div>
+              <sc-if value="{{ n.broken }}"><span style="position:absolute;top:-9px;right:-8px;font:700 9px 'JetBrains Mono';color:#fff;background:#ef4444;padding:2px 6px;border-radius:20px;box-shadow:0 2px 8px rgba(239,68,68,.6)">DOWN</span></sc-if>
+              <sc-if value="{{ n.hasDiag }}"><span style="{{ n.diagDotStyle }}">{{ n.diagCount }}</span></sc-if>
+            </div>
+          </sc-for>
+          <sc-for list="{{ comments }}" as="cm" hint-placeholder-count="0">
+            <div style="position:absolute;left:{{ cm.x }}px;top:{{ cm.y }}px;display:flex;align-items:flex-start;gap:0">
+              <span style="width:26px;height:26px;border-radius:50% 50% 50% 2px;background:#fbbf24;display:flex;align-items:center;justify-content:center;color:#0a0b0f;font-weight:700;font-size:11px;box-shadow:0 4px 12px rgba(0,0,0,.4);flex:none">AR</span>
+              <span style="margin-left:6px;margin-top:2px;font-size:12px;background:#12151c;border:1px solid rgba(255,255,255,.12);padding:5px 9px;border-radius:8px;color:#c5c8d2;white-space:nowrap">{{ cm.text }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- connect hint -->
+        <sc-if value="{{ connecting }}">
+          <div style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);z-index:20;padding:9px 15px;background:rgba(99,102,241,.9);border-radius:20px;font-size:12.5px;font-weight:600;color:#fff;box-shadow:0 8px 24px rgba(99,102,241,.4)">Click a source, then a target to connect</div>
+        </sc-if>
+
+        <!-- DIAGNOSTICS PANEL -->
+        <sc-if value="{{ problemsOpen }}">
+          <div style="position:absolute;bottom:14px;right:14px;width:372px;max-height:52%;z-index:26;background:rgba(14,16,21,.97);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.1);border-radius:13px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.6)">
+            <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.07);flex:none">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c5c8d2" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+              <span style="font-size:13px;font-weight:600">Problems</span>
+              <div style="display:flex;gap:9px;margin-left:4px">
+                <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#ef4444"><span style="width:7px;height:7px;border-radius:50%;background:#ef4444"></span>{{ diagCrit }}</span>
+                <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#f59e0b"><span style="width:7px;height:7px;border-radius:50%;background:#f59e0b"></span>{{ diagWarn }}</span>
+                <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#818cf8"><span style="width:7px;height:7px;border-radius:50%;background:#818cf8"></span>{{ diagSug }}</span>
+              </div>
+              <div onClick="{{ toggleProblems }}" style="margin-left:auto;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:#9498a6" style-hover="background:rgba(255,255,255,.06)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:10px">
+              <sc-for list="{{ diagList }}" as="dg" hint-placeholder-count="4">
+                <div onClick="{{ dg.select }}" style="padding:11px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-left:3px solid {{ dg.color }};border-radius:0 9px 9px 0;margin-bottom:8px;cursor:pointer" style-hover="background:rgba(255,255,255,.05)">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+                    <span style="font:700 9px 'JetBrains Mono';color:{{ dg.color }};background:{{ dg.color }}1f;padding:2px 6px;border-radius:5px">{{ dg.badge }}</span>
+                    <span style="font-size:12.5px;font-weight:600;color:#e6e8ee">{{ dg.title }}</span>
+                    <sc-if value="{{ dg.node }}"><span style="font:500 10px 'JetBrains Mono';color:#7c8090;margin-left:auto">{{ dg.node }}</span></sc-if>
+                  </div>
+                  <div style="font-size:11.5px;line-height:1.5;color:#9aa0b0"><span style="color:#c5c8d2">Impact.</span> {{ dg.impact }}</div>
+                  <div style="font-size:11.5px;line-height:1.5;color:#9aa0b0;margin-top:3px"><span style="color:#6ee7b7">Fix.</span> {{ dg.fix }}</div>
+                </div>
+              </sc-for>
+              <sc-if value="{{ noDiags }}">
+                <div style="padding:24px 14px;text-align:center;color:#6b6f7d"><div style="font-size:26px;margin-bottom:6px">✓</div><div style="font-size:12.5px">No problems detected. Architecture looks healthy.</div></div>
+              </sc-if>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- RIGHT PROPERTIES -->
+      <div style="width:288px;flex:none;border-left:1px solid rgba(255,255,255,.07);background:#0e1015;display:flex;flex-direction:column;overflow:hidden;position:relative">
+        <sc-if value="{{ selComp }}">
+          <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:13px 14px 0;flex:none">
+              <div style="display:flex;align-items:flex-start;gap:11px">
+                <span style="width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:{{ selComp.color }};background:{{ selComp.color }}22;flex:none">{{ selComp.iconEl }}</span>
+                <div style="flex:1;min-width:0">
+                  <input value="{{ selComp.nameVal }}" onChange="{{ selComp.onName }}" style="width:100%;background:transparent;border:none;font-size:14px;font-weight:600;color:#e6e8ee;padding:0">
+                  <div style="font-size:11.5px;color:#8a8f9e;line-height:1.4;margin-top:2px">{{ selComp.blurb }}</div>
+                </div>
+                <div style="display:flex;gap:4px;flex:none">
+                  <div onClick="{{ selComp.breakThis }}" title="Break this component" style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:#fca5a5" style-hover="background:rgba(239,68,68,.14)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 20h20L12 2z"/><path d="M12 9v5M12 17h.01"/></svg></div>
+                  <div onClick="{{ del }}" title="Delete" style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:#7c8090" style-hover="background:rgba(239,68,68,.15);color:#fca5a5"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></div>
+                </div>
+              </div>
+              <div style="display:flex;gap:2px;margin-top:12px;overflow-x:auto;border-bottom:1px solid rgba(255,255,255,.07)">
+                <sc-for list="{{ selComp.tabs }}" as="t" hint-placeholder-count="5">
+                  <div onClick="{{ t.select }}" style="{{ t.style }}">{{ t.label }}</div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:15px">
+              <sc-if value="{{ selComp.isConfig }}">
+                <sc-for list="{{ selComp.groups }}" as="g" hint-placeholder-count="2">
+                  <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#818cf8;margin:0 0 10px">{{ g.title }}</div>
+                  <div style="display:flex;flex-direction:column;gap:11px;margin-bottom:20px">
+                    <sc-for list="{{ g.fields }}" as="f" hint-placeholder-count="3">
+                      <div>
+                        <sc-if value="{{ f.isBool }}">
+                          <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+                            <span style="font-size:12.5px;font-weight:500;color:#c5c8d2">{{ f.l }}</span>
+                            <input type="checkbox" checked="{{ f.checked }}" onChange="{{ f.onBool }}" style="width:34px;height:19px;accent-color:#6366f1;cursor:pointer">
+                          </label>
+                        </sc-if>
+                        <sc-if value="{{ f.notBool }}">
+                          <label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:flex;justify-content:space-between"><span>{{ f.l }}</span><span style="color:#5b5f6d">{{ f.unit }}</span></label>
+                          <sc-if value="{{ f.isSel }}">
+                            <select value="{{ f.value }}" onChange="{{ f.onText }}" style="{{ f.inputStyle }}">
+                              <sc-for list="{{ f.options }}" as="o" hint-placeholder-count="3"><option style="background:#12151c" value="{{ o.v }}">{{ o.v }}</option></sc-for>
+                            </select>
+                          </sc-if>
+                          <sc-if value="{{ f.isInput }}">
+                            <input value="{{ f.value }}" placeholder="{{ f.placeholder }}" onChange="{{ f.onText }}" style="{{ f.inputStyle }}">
+                          </sc-if>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-for>
+              </sc-if>
+
+              <sc-if value="{{ selComp.isMetrics }}">
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#34d399;margin:0 0 12px">LIVE METRICS · LOAD {{ loadLabel }}</div>
+                <sc-for list="{{ selComp.metrics }}" as="mt" hint-placeholder-count="6">
+                  <div style="margin-bottom:13px">
+                    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px"><span style="color:#c5c8d2">{{ mt.l }}</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ mt.color }}">{{ mt.val }}</span></div>
+                    <div style="height:5px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden"><div style="height:100%;width:{{ mt.pct }};background:{{ mt.color }};border-radius:4px;transition:width .3s"></div></div>
+                  </div>
+                </sc-for>
+              </sc-if>
+
+              <sc-if value="{{ selComp.isFailure }}">
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#fb7185;margin:0 0 12px">FAILURE MODES</div>
+                <sc-for list="{{ selComp.failureModes }}" as="fm" hint-placeholder-count="3">
+                  <div style="padding:11px 13px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.16);border-radius:9px;margin-bottom:9px">
+                    <div style="font-size:12.5px;font-weight:600;color:#fca5a5;margin-bottom:3px">{{ fm.l }}</div>
+                    <div style="font-size:12px;line-height:1.5;color:#b3b7c2">{{ fm.d }}</div>
+                  </div>
+                </sc-for>
+                <div onClick="{{ selComp.breakThis }}" style="margin-top:6px;display:flex;align-items:center;justify-content:center;gap:8px;padding:11px;border-radius:9px;cursor:pointer;font-size:13px;font-weight:600;background:rgba(239,68,68,.14);border:1px solid rgba(239,68,68,.3);color:#fca5a5"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 20h20L12 2z"/></svg>{{ selComp.breakLabel }}</div>
+              </sc-if>
+
+              <sc-if value="{{ selComp.isCost }}">
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#fbbf24;margin:0 0 12px">ESTIMATED MONTHLY COST</div>
+                <div style="padding:18px;background:linear-gradient(120deg,rgba(251,191,36,.12),rgba(251,191,36,.03));border:1px solid rgba(251,191,36,.25);border-radius:12px;text-align:center">
+                  <div style="font-size:34px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:-.02em">{{ selComp.nodeCost }}</div>
+                  <div style="font-size:12px;color:#9498a6;margin-top:4px">/ month at current load ({{ loadLabel }})</div>
+                </div>
+                <div style="font-size:12px;line-height:1.55;color:#8a8f9e;margin-top:14px">Derived from instance class, replica/shard count, region and simulated traffic. Scales live as you change configuration or inject load.</div>
+              </sc-if>
+
+              <sc-if value="{{ selComp.isTips }}">
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#34d399;margin:0 0 8px">PROS</div>
+                <sc-for list="{{ selComp.tips.pros }}" as="p" hint-placeholder-count="3"><div style="display:flex;gap:8px;font-size:12.5px;line-height:1.5;color:#c5c8d2;margin-bottom:6px"><span style="color:#34d399;flex:none">+</span>{{ p }}</div></sc-for>
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#fb7185;margin:16px 0 8px">CONS</div>
+                <sc-for list="{{ selComp.tips.cons }}" as="p" hint-placeholder-count="3"><div style="display:flex;gap:8px;font-size:12.5px;line-height:1.5;color:#c5c8d2;margin-bottom:6px"><span style="color:#fb7185;flex:none">−</span>{{ p }}</div></sc-for>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
+                  <div><div style="font:600 10px 'JetBrains Mono';color:#818cf8;margin-bottom:6px">USE WHEN</div><sc-for list="{{ selComp.tips.whenUse }}" as="p" hint-placeholder-count="2"><div style="font-size:12px;line-height:1.45;color:#b3b7c2;margin-bottom:5px">{{ p }}</div></sc-for></div>
+                  <div><div style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:6px">AVOID WHEN</div><sc-for list="{{ selComp.tips.whenNot }}" as="p" hint-placeholder-count="2"><div style="font-size:12px;line-height:1.45;color:#8a8f9e;margin-bottom:5px">{{ p }}</div></sc-for></div>
+                </div>
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#e879f9;margin:0 0 8px">EXPECTED FOLLOW-UPS</div>
+                <sc-for list="{{ selComp.tips.followups }}" as="p" hint-placeholder-count="3"><div style="padding:9px 11px;background:rgba(232,121,249,.07);border:1px solid rgba(232,121,249,.16);border-radius:8px;font-size:12px;line-height:1.45;color:#c5c8d2;margin-bottom:7px">{{ p }}</div></sc-for>
+              </sc-if>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ selEdge }}">
+          <div style="flex:1;display:flex;flex-direction:column">
+            <div style="padding:14px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:11px">
+              <span style="width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#a5b4fc;background:rgba(99,102,241,.16);flex:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg></span>
+              <div style="flex:1"><div style="font-size:14px;font-weight:600">Connection</div><div style="font:500 11px 'JetBrains Mono';color:#7c8090">Edge properties</div></div>
+              <div onClick="{{ del }}" title="Delete" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:#7c8090" style-hover="background:rgba(239,68,68,.15);color:#fca5a5"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></div>
+            </div>
+            <div style="padding:15px;overflow-y:auto">
+              <label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:block">PROTOCOL</label>
+              <select name="protocol" value="{{ selEdge.protocol }}" onChange="{{ onEdgeField2 }}" style="width:100%;height:34px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 8px;color:#e6e8ee;font-size:13px;margin-bottom:14px">
+                <sc-for list="{{ selEdge.protocols }}" as="p" hint-placeholder-count="6"><option style="background:#12151c" value="{{ p }}">{{ p }}</option></sc-for>
+              </select>
+              <label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:block">SERIALIZATION</label>
+              <select name="serializer" value="{{ selEdge.serializer }}" onChange="{{ onEdgeField2 }}" style="width:100%;height:34px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 8px;color:#e6e8ee;font-size:13px;margin-bottom:14px">
+                <sc-for list="{{ selEdge.serializers }}" as="p" hint-placeholder-count="4"><option style="background:#12151c" value="{{ p }}">{{ p }}</option></sc-for>
+              </select>
+              <label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:block">THROUGHPUT BADGE</label>
+              <input name="badge" value="{{ selEdge.badge }}" onChange="{{ onEdgeField2 }}" placeholder="e.g. 100K RPS · 1 TB/day" style="width:100%;height:34px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 9px;color:#e6e8ee;font-size:13px;font-family:'JetBrains Mono',monospace;margin-bottom:14px">
+              <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#818cf8;margin:4px 0 9px">RESILIENCE</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+                <div><label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:block">RETRIES</label><input name="retries" value="{{ selEdge.retries }}" onChange="{{ onEdgeField2 }}" style="width:100%;height:31px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 9px;color:#e6e8ee;font-size:12.5px;font-family:'JetBrains Mono',monospace"></div>
+                <div><label style="font:600 10px 'JetBrains Mono';color:#7c8090;margin-bottom:5px;display:block">TIMEOUT (MS)</label><input name="timeout" value="{{ selEdge.timeout }}" onChange="{{ onEdgeField2 }}" style="width:100%;height:31px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 9px;color:#e6e8ee;font-size:12.5px;font-family:'JetBrains Mono',monospace"></div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <label style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;cursor:pointer"><span style="font-size:12.5px;font-weight:500">TLS encryption</span><input type="checkbox" name="tls" checked="{{ selEdge.tls }}" onChange="{{ onEdgeField2 }}" style="width:16px;height:16px;accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;cursor:pointer"><span style="font-size:12.5px;font-weight:500">Compression</span><input type="checkbox" name="compression" checked="{{ selEdge.compression }}" onChange="{{ onEdgeField2 }}" style="width:16px;height:16px;accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;cursor:pointer"><span style="font-size:12.5px;font-weight:500">Circuit breaker</span><input type="checkbox" name="cb" checked="{{ selEdge.cb }}" onChange="{{ onEdgeField2 }}" style="width:16px;height:16px;accent-color:#6366f1"></label>
+                <label style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;cursor:pointer"><span style="font-size:12.5px;font-weight:500">Bi-directional</span><input type="checkbox" name="bidir" checked="{{ selEdge.bidir }}" onChange="{{ onEdgeField2 }}" style="width:16px;height:16px;accent-color:#6366f1"></label>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ noSel }}">
+          <div style="flex:1;display:flex;flex-direction:column;overflow-y:auto">
+            <div style="padding:15px 15px 12px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:9px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              <div style="font-size:13px;font-weight:600">Architecture Health</div>
+            </div>
+            <sc-if value="{{ health }}">
+              <div style="padding:16px 15px">
+                <div style="display:flex;align-items:center;gap:15px;margin-bottom:16px">
+                  <div style="width:70px;height:70px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;background:{{ health.ringStyle }}"><div style="width:57px;height:57px;border-radius:50%;background:#0e1015;display:flex;flex-direction:column;align-items:center;justify-content:center"><span style="font-size:21px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ health.score }}</span><span style="font-size:9px;color:#7c8090">/ 5.0</span></div></div>
+                  <div style="flex:1">
+                    <div style="font-size:13px;font-weight:600;color:{{ health.gradeColor }}">{{ health.grade }}</div>
+                    <div style="display:flex;gap:8px;margin-top:7px;flex-wrap:wrap">
+                      <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#ef4444"><span style="width:7px;height:7px;border-radius:50%;background:#ef4444"></span>{{ health.crit }}</span>
+                      <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#f59e0b"><span style="width:7px;height:7px;border-radius:50%;background:#f59e0b"></span>{{ health.warn }}</span>
+                      <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#818cf8"><span style="width:7px;height:7px;border-radius:50%;background:#818cf8"></span>{{ health.sug }}</span>
+                    </div>
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px">
+                  <div style="padding:11px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px"><div style="font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ totalCostLabel }}</div><div style="font-size:10.5px;color:#9498a6;margin-top:1px">Monthly cost</div></div>
+                  <div style="padding:11px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px"><div style="font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ health.avail }}</div><div style="font-size:10.5px;color:#9498a6;margin-top:1px">Availability</div></div>
+                  <div style="padding:11px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px"><div style="font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ health.p99 }}</div><div style="font-size:10.5px;color:#9498a6;margin-top:1px">Est. p99</div></div>
+                  <div style="padding:11px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px"><div style="font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ health.spofColor }}">{{ health.spofs }}</div><div style="font-size:10.5px;color:#9498a6;margin-top:1px">Potential SPOFs</div></div>
+                </div>
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#818cf8;margin:0 0 10px">DIMENSIONS</div>
+                <sc-for list="{{ health.dims }}" as="dm" hint-placeholder-count="10">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                    <span style="font-size:11.5px;color:#c5c8d2;width:96px;flex:none">{{ dm.k }}</span>
+                    <div style="flex:1;height:5px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden"><div style="height:100%;width:{{ dm.pct }};background:{{ dm.color }};border-radius:4px;transition:width .3s"></div></div>
+                    <span style="font:600 11px 'JetBrains Mono';color:{{ dm.color }};width:20px;text-align:right">{{ dm.v }}</span>
+                  </div>
+                </sc-for>
+                <div style="font:600 10px 'JetBrains Mono';letter-spacing:.05em;color:#7c8090;margin:16px 0 8px">READINESS</div>
+                <div style="display:flex;flex-direction:column;gap:7px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px"><span style="color:#c5c8d2">Monitoring stack</span><span style="{{ health.monStyle }}">{{ health.monLabel }}</span></div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px"><span style="color:#c5c8d2">Automated backups</span><span style="{{ health.backupStyle }}">{{ health.backupLabel }}</span></div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px"><span style="color:#c5c8d2">No critical security gaps</span><span style="{{ health.secStyle }}">{{ health.secLabel }}</span></div>
+                </div>
+                <div onClick="{{ toggleProblems }}" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:8px;padding:10px;border-radius:9px;cursor:pointer;font-size:12.5px;font-weight:600;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.28);color:#a5b4fc">View all diagnostics</div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+        <sc-if value="{{ aiOpen }}">
+          <div style="position:absolute;inset:0;z-index:30;background:#0e1015;display:flex;flex-direction:column;animation:sds-in .14s ease">
+            <div style="padding:14px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:10px">
+              <span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#6366f1,#a855f7);display:flex;align-items:center;justify-content:center;color:#fff"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/></svg></span>
+              <div style="flex:1"><div style="font-size:14px;font-weight:600">AI Assistant</div><div style="font-size:11px;color:#7c8090">Hints only — never full solutions</div></div>
+              <div onClick="{{ toggleAI }}" style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:#9498a6" style-hover="background:rgba(255,255,255,.06)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:14px">
+              <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px">
+                <span style="font-size:12px;font-weight:500;color:#c5c8d2;padding:6px 11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:20px;cursor:pointer" style-hover="border-color:rgba(99,102,241,.5)">Find SPOFs</span>
+                <span style="font-size:12px;font-weight:500;color:#c5c8d2;padding:6px 11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:20px;cursor:pointer" style-hover="border-color:rgba(99,102,241,.5)">Estimate bottlenecks</span>
+                <span style="font-size:12px;font-weight:500;color:#c5c8d2;padding:6px 11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:20px;cursor:pointer" style-hover="border-color:rgba(99,102,241,.5)">Summarize</span>
+              </div>
+              <sc-for list="{{ aiHints }}" as="h" hint-placeholder-count="4">
+                <div style="padding:13px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-left:3px solid {{ h.c }};border-radius:0 10px 10px 0;margin-bottom:10px">
+                  <div style="font-size:12px;font-weight:600;color:{{ h.c }};margin-bottom:4px">{{ h.t }}</div>
+                  <div style="font-size:12.5px;line-height:1.5;color:#b3b7c2">{{ h.d }}</div>
+                </div>
+              </sc-for>
+              <div style="margin-top:6px;padding:11px 13px;font-size:12px;line-height:1.5;color:#7c8090;background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.16);border-radius:10px">The assistant surfaces gaps and tradeoffs for the interviewer — it never auto-completes the candidate's design.</div>
+            </div>
+            <div style="padding:12px;border-top:1px solid rgba(255,255,255,.07)">
+              <div style="height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:9px;color:#7c8090;font-size:12.5px">Ask about the architecture…<svg style="margin-left:auto" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg></div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <!-- BOTTOM BAR -->
+    <div style="height:40px;flex:none;display:flex;align-items:center;gap:16px;padding:0 16px;border-top:1px solid rgba(255,255,255,.07);background:#0e1015;font-size:12px;color:#9498a6">
+      <div style="display:flex;align-items:center;gap:-6px">
+        <span style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);border:2px solid #0e1015;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:10px;color:#fff">AR</span>
+        <span style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#10b981,#22d3ee);border:2px solid #0e1015;margin-left:-6px;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:10px;color:#fff">PS</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:#34d399;animation:sds-pulse 2s infinite"></span>Priya is editing</div>
+      <div style="display:flex;align-items:center;gap:6px;color:#818cf8"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10a7 7 0 0 1-14 0M12 17v4"/></svg>Voice connected</div>
+      <div style="flex:1"></div>
+      <div onClick="{{ toggleProblems }}" title="Problems" style="display:flex;align-items:center;gap:9px;padding:3px 10px;border-radius:7px;cursor:pointer;border:1px solid {{ problemsBorder }}" style-hover="background:rgba(255,255,255,.04)">
+        <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#ef4444"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg>{{ diagCrit }}</span>
+        <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#f59e0b"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2L2 20h20L12 2z"/><path d="M12 9v4"/></svg>{{ diagWarn }}</span>
+        <span style="display:flex;align-items:center;gap:4px;font:600 11px 'JetBrains Mono';color:#818cf8">{{ diagSug }}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px"><span style="width:6px;height:6px;border-radius:50%;background:#34d399"></span>All changes saved</div>
+      <div style="font-family:'JetBrains Mono',monospace">{{ nodeCount }} nodes · {{ edgeCount }} links</div>
+      <div style="display:flex;align-items:center;gap:7px;padding:3px 10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:7px;color:#c5c8d2;font-family:'JetBrains Mono',monospace"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>{{ timer }}</div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isReview }}">
+  <div style="height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#0a0b0f">
+    <div style="height:54px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid rgba(255,255,255,.07);background:#0e1015">
+      <div onClick="{{ backToWs }}" style="display:flex;align-items:center;gap:7px;cursor:pointer;color:#9498a6;font-size:13px;font-weight:500" style-hover="color:#e6e8ee"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>Back to canvas</div>
+      <div style="width:1px;height:20px;background:rgba(255,255,255,.09)"></div>
+      <span style="font:600 10px 'JetBrains Mono';padding:3px 8px;border-radius:20px;color:#fbbf24;background:rgba(251,191,36,.14)">REVIEW MODE</span>
+      <div style="font-size:14px;font-weight:600">{{ curTitle }} — Senior Backend loop</div>
+      <div style="flex:1"></div>
+      <div style="font-size:12.5px;color:#9498a6">Candidate: <span style="color:#e6e8ee;font-weight:500">Priya S.</span> · {{ timer }}</div>
+      <button style="display:flex;align-items:center;gap:7px;height:34px;padding:0 15px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer" style-hover="background:#5457e5">Submit evaluation</button>
+    </div>
+
+    <div style="flex:1;display:flex;min-height:0">
+      <div style="flex:1;overflow-y:auto;padding:28px 32px">
+        <div style="max-width:640px">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">
+            <span style="width:7px;height:7px;border-radius:50%;background:#818cf8"></span>
+            <span style="font-size:15px;font-weight:600">Final architecture</span>
+            <span style="font:500 11px 'JetBrains Mono';color:#7c8090;background:rgba(255,255,255,.05);padding:2px 8px;border-radius:6px">frozen</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px">
+            <sc-for list="{{ reviewMetrics }}" as="m" hint-placeholder-count="6">
+              <div style="padding:14px 16px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:12px"><div style="font-size:26px;font-weight:600;font-family:'JetBrains Mono',monospace;letter-spacing:-.02em">{{ m.value }}</div><div style="font-size:12px;color:#9498a6;margin-top:3px">{{ m.label }}</div></div>
+            </sc-for>
+          </div>
+          <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin-bottom:10px">COMPONENTS PLACED</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:26px">
+            <sc-for list="{{ reviewComps }}" as="c" hint-placeholder-count="8">
+              <div style="display:flex;align-items:center;gap:8px;padding:7px 11px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-radius:9px"><span style="color:{{ c.color }};display:flex">{{ c.iconEl }}</span><span style="font-size:12.5px;font-weight:500">{{ c.name }}</span></div>
+            </sc-for>
+          </div>
+          <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin-bottom:10px">OBSERVATIONS</div>
+          <sc-for list="{{ aiHints }}" as="h" hint-placeholder-count="4">
+            <div style="padding:13px 15px;background:#12151c;border:1px solid rgba(255,255,255,.07);border-left:3px solid {{ h.c }};border-radius:0 10px 10px 0;margin-bottom:10px"><div style="font-size:12.5px;font-weight:600;color:{{ h.c }};margin-bottom:3px">{{ h.t }}</div><div style="font-size:12.5px;line-height:1.5;color:#b3b7c2">{{ h.d }}</div></div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="width:400px;flex:none;border-left:1px solid rgba(255,255,255,.07);background:#0e1015;display:flex;flex-direction:column;overflow-y:auto">
+        <div style="padding:22px 22px 18px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:16px">
+          <div style="width:74px;height:74px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;background:conic-gradient(#6366f1 0% 68%,rgba(255,255,255,.08) 68% 100%)"><div style="width:60px;height:60px;border-radius:50%;background:#0e1015;display:flex;flex-direction:column;align-items:center;justify-content:center"><span style="font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ reviewAvg }}</span><span style="font-size:9px;color:#7c8090">/ 5.0</span></div></div>
+          <div><div style="font-size:15px;font-weight:600">Scorecard</div><div style="font-size:12.5px;color:#9498a6;margin-top:3px;line-height:1.4">Rate each dimension.<br>Averaged into the overall score.</div></div>
+        </div>
+        <div style="padding:16px 22px 22px">
+          <sc-for list="{{ reviewRows }}" as="r" hint-placeholder-count="10">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+              <span style="font-size:13px;font-weight:500;color:#c5c8d2">{{ r.key }}</span>
+              <div style="display:flex;gap:5px">
+                <sc-for list="{{ r.dots }}" as="d" hint-placeholder-count="5">
+                  <span onClick="{{ d.set }}" style="{{ d.style }}"></span>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <div style="font:600 10px 'JetBrains Mono';letter-spacing:.06em;color:#7c8090;margin:20px 0 8px">SUMMARY NOTES</div>
+          <textarea placeholder="Overall feedback for the loop debrief…" style="width:100%;min-height:90px;resize:vertical;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:9px;padding:10px;color:#e6e8ee;font-size:13px;line-height:1.5"></textarea>
+          <div style="display:flex;gap:9px;margin-top:14px">
+            <div style="flex:1;text-align:center;padding:11px;background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.3);border-radius:9px;color:#6ee7b7;font-size:13px;font-weight:600;cursor:pointer">Advance</div>
+            <div style="flex:1;text-align:center;padding:11px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.28);border-radius:9px;color:#fca5a5;font-size:13px;font-weight:600;cursor:pointer">No hire</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- drag ghost -->
+  <sc-if value="{{ ghost }}">
+    <div style="{{ ghostStyle }}">
+      <span style="color:{{ ghost.color }};display:flex">{{ ghost.iconEl }}</span>
+      <span style="font-size:12.5px;font-weight:500">{{ ghost.name }}</span>
+    </div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  canvasRef = React.createRef();
+  state = {
+    screen:'dashboard', data:null,
+    question:'twitter', comps:[], edges:[], broken:[],
+    selectedId:null, selectedEdgeId:null,
+    tool:'pointer', pan:{x:16,y:26}, zoom:0.82, connectFrom:null,
+    traffic:0, constraints:[], comments:[], menu:null,
+    questionOpen:true, aiOpen:false, showLatency:false,
+    ghost:null, elapsed:1387, candidateLink:'https://studio.local/i/sds-twitter-priya',
+    kb:null, inspectorTab:'general', problemsOpen:false, healthOpen:false,
+    scores:{Scalability:4,Availability:3,Reliability:3,Communication:4,Tradeoffs:3,'Database choice':4,Caching:3,'Load balancing':4,Observability:2,Security:3},
+  };
+
+  componentDidMount(){
+    Promise.all([import('./sds-data.js'),import('./sds-knowledge.js')]).then(([m,kb])=>{
+      this.DATA=m; this.KB=kb;
+      const seed=this.seedFor('twitter',m);
+      this.setState({data:m, kb, comps:seed.comps, edges:seed.edges});
+    });
+    this._onMove=(e)=>this.handleMove(e);
+    this._onUp=(e)=>this.handleUp(e);
+    window.addEventListener('pointermove',this._onMove);
+    window.addEventListener('pointerup',this._onUp);
+    this._timer=setInterval(()=>{ if(this.state.screen==='workspace') this.setState(s=>({elapsed:(s.elapsed||0)+1})); },1000);
+  }
+  componentWillUnmount(){
+    window.removeEventListener('pointermove',this._onMove);
+    window.removeEventListener('pointerup',this._onUp);
+    clearInterval(this._timer);
+  }
+
+  seedFor(id,m){
+    if(id!=='twitter') return {comps:[],edges:[]};
+    const comps=m.SEED.comps.map(c=>({...c, props:{...(c.props||{})}}));
+    const edges=m.SEED.edges.map(e=>({...e}));
+    return {comps,edges};
+  }
+  openQuestion(id){
+    const m=this.state.data; if(!m) return;
+    const seed=this.seedFor(id,m);
+    this.setState({screen:'workspace',question:id,comps:seed.comps,edges:seed.edges,broken:[],traffic:0,selectedId:null,selectedEdgeId:null,constraints:[],elapsed:1387,tool:'pointer',pan:{x:16,y:26},zoom:0.82});
+    this._hist=[];this._future=[];
+  }
+  openCreateInterview(){ this.setState({screen:'createInterview',menu:null}); }
+  chooseQuestion(id){ this.setState({question:id}); }
+  generateCandidateLink(){ this.setState({screen:'linkGenerated',candidateLink:'https://studio.local/i/sds-'+(this.state.question||'twitter')+'-priya'}); }
+  startWorkspace(){ this.openQuestion(this.state.question||'twitter'); }
+
+  icon(name,size){
+    const d=this.state.data; if(!d) return null;
+    const key=d.ITEM_ICON[name]||'cube';
+    const g=d.ICONS[key]||d.ICONS.cube;
+    return React.createElement('svg',{width:size||18,height:size||18,viewBox:'0 0 24 24',
+      fill:g.fill?'currentColor':'none',stroke:g.fill?'none':'currentColor',
+      strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round',
+      dangerouslySetInnerHTML:{__html:g.d}});
+  }
+  iconFor(c,size){ return this.icon(c.base||c.type,size); }
+
+  setTool(t){ this.setState({tool:t,menu:null,connectFrom:null}); }
+  openMenu(m){ this.setState(s=>({menu:s.menu===m?null:m})); }
+
+  snapshot(){ this._hist=this._hist||[]; this._hist.push(JSON.stringify({comps:this.state.comps,edges:this.state.edges,broken:this.state.broken})); if(this._hist.length>60)this._hist.shift(); this._future=[]; }
+  undo(){ if(!this._hist||!this._hist.length)return; this._future=this._future||[]; this._future.push(JSON.stringify({comps:this.state.comps,edges:this.state.edges,broken:this.state.broken})); this.setState(JSON.parse(this._hist.pop())); }
+  redo(){ if(!this._future||!this._future.length)return; this._hist.push(JSON.stringify({comps:this.state.comps,edges:this.state.edges,broken:this.state.broken})); this.setState(JSON.parse(this._future.pop())); }
+
+  onNodeDown(e,id){
+    e.stopPropagation();
+    const t=this.state.tool;
+    if(t==='failure'){ this.breakComp(id); return; }
+    if(t==='connector'){ this.handleConnect(id); return; }
+    const c=this.state.comps.find(x=>x.id===id); if(!c)return;
+    this.setState({selectedId:id,selectedEdgeId:null,menu:null});
+    this._drag={kind:'node',id,sx:e.clientX,sy:e.clientY,ox:c.x,oy:c.y,moved:false};
+  }
+  onCanvasDown(e){
+    const t=this.state.tool;
+    if(t==='comment'){ this.addComment(e); return; }
+    this.setState({selectedId:null,selectedEdgeId:null,connectFrom:null,menu:null});
+    this._drag={kind:'pan',sx:e.clientX,sy:e.clientY,px:this.state.pan.x,py:this.state.pan.y};
+  }
+  onPaletteDown(e,it){
+    e.preventDefault();
+    this._drag={kind:'palette',item:it};
+    this.setState({ghost:{x:e.clientX,y:e.clientY,name:it.name,color:it.color}});
+  }
+  handleMove(e){
+    const dr=this._drag; if(!dr)return;
+    if(dr.kind==='node'){
+      const z=this.state.zoom;
+      const nx=Math.round(dr.ox+(e.clientX-dr.sx)/z), ny=Math.round(dr.oy+(e.clientY-dr.sy)/z);
+      if(!dr.moved){ dr.moved=true; this.snapshot(); }
+      this.setState(s=>({comps:s.comps.map(c=>c.id===dr.id?{...c,x:nx,y:ny}:c)}));
+    } else if(dr.kind==='pan'){
+      this.setState({pan:{x:dr.px+(e.clientX-dr.sx),y:dr.py+(e.clientY-dr.sy)}});
+    } else if(dr.kind==='palette'){
+      this.setState(s=>({ghost:{...s.ghost,x:e.clientX,y:e.clientY}}));
+    }
+  }
+  handleUp(e){
+    const dr=this._drag; this._drag=null; if(!dr)return;
+    if(dr.kind==='palette'){
+      const r=this.canvasRef.current&&this.canvasRef.current.getBoundingClientRect();
+      if(r&&e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom){
+        const z=this.state.zoom;
+        const x=Math.round((e.clientX-r.left-this.state.pan.x)/z-75);
+        const y=Math.round((e.clientY-r.top-this.state.pan.y)/z-33);
+        this.addComponent(dr.item.name,dr.item.cat,x,y);
+      }
+      this.setState({ghost:null});
+    }
+  }
+  handleConnect(id){
+    if(!this.state.connectFrom){ this.setState({connectFrom:id}); return; }
+    if(this.state.connectFrom===id){ this.setState({connectFrom:null}); return; }
+    this.snapshot();
+    const from=this.state.connectFrom;
+    this.setState(s=>({edges:[...s.edges,{id:'e'+Date.now(),from,to:id,protocol:'HTTP'}],connectFrom:null}));
+  }
+  addComponent(name,cat,x,y){
+    this.snapshot();
+    const id='c'+Date.now();
+    this.setState(s=>({comps:[...s.comps,{id,type:name,cat,x,y,w:150,props:{}}],selectedId:id,selectedEdgeId:null,tool:'pointer'}));
+  }
+  addComment(e){
+    const r=this.canvasRef.current.getBoundingClientRect();
+    const z=this.state.zoom;
+    const x=(e.clientX-r.left-this.state.pan.x)/z, y=(e.clientY-r.top-this.state.pan.y)/z;
+    this.setState(s=>({comments:[...s.comments,{id:'m'+Date.now(),x,y,text:'Add a note…',author:'You'}],tool:'pointer'}));
+  }
+  breakComp(id){ this.snapshot(); this.setState(s=>({broken:s.broken.includes(id)?s.broken.filter(x=>x!==id):[...s.broken,id]})); }
+  setTraffic(n){ this.setState(s=>({traffic:s.traffic===n?0:n,menu:null})); }
+  resetSim(){ this.setState({broken:[],traffic:0,menu:null}); }
+  addConstraint(t){ this.setState(s=>({constraints:[...s.constraints,{id:'k'+Date.now(),text:t}],menu:null})); }
+  editComp(k,v){ this.setState(s=>({comps:s.comps.map(c=>c.id===s.selectedId?(k==='name'?{...c,type:v}:{...c,props:{...c.props,[k]:v}}):c)})); }
+  setInspectorTab(t){ this.setState({inspectorTab:t}); }
+  loadMult(){ const t=this.state.traffic; return t===0?1:t===100?6:t===1000?24:120; }
+
+  buildCtx(){
+    const comps=this.state.comps, edges=this.state.edges; const byId={}; comps.forEach(c=>byId[c.id]=c);
+    return {comps,edges,byId};
+  }
+  fieldVM(f,node,cfg){
+    const isName=f.k==='name';
+    const val=isName?node.type:(cfg[f.k]!=null?cfg[f.k]:f.def);
+    const set=(v)=>this.editComp(f.k,v);
+    const vm={k:f.k,l:f.l,mono:f.mono,unit:f.unit||'',
+      isText:f.t==='text',isNum:f.t==='num',isSel:f.t==='sel',isBool:f.t==='bool',
+      notBool:f.t!=='bool', isInput:(f.t==='text'||f.t==='num'),
+      value:val, placeholder:isName?(f.def||'name'):(f.def||''),
+      onText:(e)=>set(e.target.value), onBool:(e)=>set(e.target.checked), checked:!!val,
+      inputStyle:'width:100%;height:31px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:0 9px;color:#e6e8ee;font-size:12.5px;'+(f.mono?"font-family:'JetBrains Mono',monospace":'')};
+    if(f.t==='sel') vm.options=(f.opts||[]).map(o=>({v:o,sel:String(val)===String(o)}));
+    return vm;
+  }
+  injectScenario(sc){
+    this.snapshot();
+    const brk=(pred)=>this.state.comps.filter(pred).map(c=>c.id);
+    const M={
+      'redis':()=>({broken:brk(c=>/Redis|Cache/.test(c.type)), k:'Redis cluster down'}),
+      'kafka':()=>({broken:brk(c=>/Kafka|Pub\/Sub/.test(c.type)), k:'Kafka broker died'}),
+      'db':()=>({broken:brk(c=>c.cat==='Storage'&&/SQL|Cassandra|Mongo/.test(c.type)), k:'Primary DB outage'}),
+      'region':()=>({broken:this.state.comps.slice(0,Math.ceil(this.state.comps.length/2)).map(c=>c.id), k:'us-east-1 region outage'}),
+      'az':()=>({broken:brk((c,i)=>true).filter((_,i)=>i%3===0), k:'AZ-1a outage'}),
+      'spike':()=>({traffic:1000, k:'Traffic ×1000 spike'}),
+      'flash':()=>({traffic:10000, k:'Flash sale — ×10000'}),
+      'hot':()=>({traffic:1000, broken:[], k:'Hot partition'}),
+      'slow':()=>({traffic:100, k:'Slow DB — latency injected'}),
+      'stampede':()=>({traffic:1000, broken:brk(c=>/Redis|Cache/.test(c.type)), k:'Cache stampede'}),
+      'retry':()=>({traffic:100, k:'Retry storm'}),
+    }[sc.id]||(()=>({k:sc.label}));
+    const r=M();
+    this.setState(s=>({
+      broken: r.broken!=null? Array.from(new Set([...s.broken,...r.broken])) : s.broken,
+      traffic: r.traffic!=null? r.traffic : s.traffic,
+      constraints:[...s.constraints,{id:'k'+Date.now(),text:r.k,challenge:true}],
+      menu:null, problemsOpen:true,
+    }));
+  }
+  editEdge(k,v){ this.setState(s=>({edges:s.edges.map(e=>e.id===s.selectedEdgeId?{...e,[k]:v}:e)})); }
+  deleteSel(){
+    this.snapshot();
+    this.setState(s=>{
+      if(s.selectedId) return {comps:s.comps.filter(c=>c.id!==s.selectedId),edges:s.edges.filter(e=>e.from!==s.selectedId&&e.to!==s.selectedId),broken:s.broken.filter(b=>b!==s.selectedId),selectedId:null};
+      if(s.selectedEdgeId) return {edges:s.edges.filter(e=>e.id!==s.selectedEdgeId),selectedEdgeId:null};
+      return {};
+    });
+  }
+  zoomBy(f){ this.setState(s=>({zoom:Math.min(2.2,Math.max(.35,+(s.zoom*f).toFixed(2)))})); }
+  fmtTimer(){ const t=this.state.elapsed||0; return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0'); }
+
+  reviewMetrics(){
+    const c=this.state.comps, e=this.state.edges;
+    const cnt=(f)=>c.filter(f).length;
+    return [
+      {label:'Components',value:c.length},
+      {label:'Connections',value:e.length},
+      {label:'Data stores',value:cnt(x=>x.cat==='Storage')},
+      {label:'Caches',value:cnt(x=>/Redis|Cache/.test(x.type))},
+      {label:'Queues',value:cnt(x=>x.cat==='Messaging'||/Queue/.test(x.type))},
+      {label:'Load balancers',value:cnt(x=>/Load Balancer/.test(x.type))},
+    ];
+  }
+
+  renderVals(){
+    const d=this.state.data, S=this.state;
+    const cl01=(v)=>Math.max(0,Math.min(1,v||0));
+    const money=(n)=>n>=1000?('$'+(n/1000).toFixed(n>=10000?0:1)+'K'):('$'+Math.round(n));
+    const accent='#6366f1';
+    const tb=(a)=>`width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;border:1px solid ${a?'rgba(99,102,241,.45)':'transparent'};background:${a?'rgba(99,102,241,.16)':'transparent'};color:${a?'#a5b4fc':'#9498a6'};transition:all .12s`;
+    const base={
+      screen:S.screen, isDashboard:S.screen==='dashboard', isCreateInterview:S.screen==='createInterview', isLinkGenerated:S.screen==='linkGenerated',
+      isWorkspace:S.screen==='workspace', isReview:S.screen==='review',
+      resume:()=>this.setState({screen:'workspace'}),
+      openCreateInterview:()=>this.openCreateInterview(),
+      generateCandidateLink:()=>this.generateCandidateLink(),
+      startWorkspace:()=>this.startWorkspace(),
+      chooseTwitter:()=>this.chooseQuestion('twitter'),
+      choosePayment:()=>this.chooseQuestion('payment'),
+      chooseTinyurl:()=>this.chooseQuestion('tinyurl'),
+      go:()=>this.setState({screen:'dashboard'}), accent,
+      candidateLink:S.candidateLink,
+      ghost:S.ghost?{...S.ghost,iconEl:this.icon(S.ghost.name,15)}:null,
+      ghostStyle:S.ghost?`position:fixed;left:${S.ghost.x+8}px;top:${S.ghost.y+8}px;z-index:9999;pointer-events:none;display:flex;align-items:center;gap:8px;padding:8px 12px;background:#12151c;border:1px solid ${S.ghost.color};border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.5);opacity:.95`:'',
+    };
+    if(!d) return {...base, questions:[], stats:[], palette:[], nodes:[], edges:[], constraints:[], reviewRows:[], reviewMetrics:[], setupQuestionTitle:'Design Twitter'};
+
+    const diffColor={Easy:'#34d399',Medium:'#fbbf24',Hard:'#fb7185'};
+    const questions=d.QUESTIONS.map(q=>({...q,diffColor:diffColor[q.diff]||'#9498a6',open:()=>this.openQuestion(q.id)}));
+    const stats=[{label:'Interviews this week',value:'12'},{label:'Avg. duration',value:'46m'},{label:'Pass rate',value:'58%'},{label:'Question presets',value:'14'}];
+    const setupQuestion=d.QUESTIONS.find(x=>x.id===S.question)||d.QUESTIONS[0];
+
+    const catColor={}; d.PALETTE.forEach(g=>catColor[g.cat]=g.color);
+    const byId={}; S.comps.forEach(c=>byId[c.id]=c);
+    const adj={}; S.edges.forEach(e=>{(adj[e.from]=adj[e.from]||[]).push(e.to)});
+    const broken=new Set(S.broken); const aff=new Set(); let q=[...broken];
+    while(q.length){ const n=q.shift(); (adj[n]||[]).forEach(m=>{ if(!broken.has(m)&&!aff.has(m)){aff.add(m);q.push(m);} }); }
+    // early diagnostics for node warning dots
+    let earlyDiagByNode={};
+    if(this.KB){ try{ this.KB.runValidation({comps:S.comps,edges:S.edges,byId}).forEach(dg=>{ if(dg.nodeId){ earlyDiagByNode[dg.nodeId]=earlyDiagByNode[dg.nodeId]||{critical:0,warn:0,suggest:0}; earlyDiagByNode[dg.nodeId][dg.sev]++; } }); }catch(e){} }
+    const NH=66;
+    const nodes=S.comps.map(c=>{
+      const color=catColor[c.cat]||'#818cf8';
+      let st='normal';
+      if(broken.has(c.id))st='broken'; else if(aff.has(c.id))st='affected'; else if(S.traffic>0)st='overloaded';
+      const sel=S.selectedId===c.id, csrc=S.connectFrom===c.id;
+      const glow= st==='broken'?'0 0 0 1.5px #ef4444,0 0 26px rgba(239,68,68,.55)'
+        : st==='affected'?'0 0 0 1.5px rgba(239,68,68,.5),0 0 18px rgba(239,68,68,.28)'
+        : st==='overloaded'?'0 0 0 1.5px #f59e0b,0 0 22px rgba(245,158,11,.5)'
+        : sel?`0 0 0 1.5px ${accent},0 0 0 4px rgba(99,102,241,.22)`
+        : csrc?'0 0 0 2px #6366f1,0 0 16px rgba(99,102,241,.5)':'0 2px 6px rgba(0,0,0,.4)';
+      const bc= (st==='broken'||st==='affected')?'rgba(239,68,68,.55)':st==='overloaded'?'rgba(245,158,11,.55)':'rgba(255,255,255,.1)';
+      const style={position:'absolute',left:c.x+'px',top:c.y+'px',width:c.w+'px',height:NH+'px',background:'#161922',border:'1px solid '+bc,borderRadius:'11px',boxShadow:glow,cursor:S.tool==='pointer'?'grab':'pointer',display:'flex',alignItems:'center',gap:'11px',padding:'0 13px',userSelect:'none',transition:'box-shadow .18s,border-color .18s'};
+      const dgn=earlyDiagByNode[c.id]||{critical:0,warn:0,suggest:0}; const dgTop=dgn.critical>0?'#ef4444':dgn.warn>0?'#f59e0b':null;
+      return {id:c.id,name:c.type,cat:c.cat,color,iconEl:this.iconFor(c,19),style,state:st,broken:st==='broken',
+        latency:(c.props&&c.props.latency)||'', showLatency:S.showLatency,
+        hasDiag:!!dgTop && st!=='broken', diagDotStyle:`position:absolute;top:-7px;left:-7px;width:15px;height:15px;border-radius:50%;background:${dgTop};border:2px solid #0e1015;display:flex;align-items:center;justify-content:center;font:700 9px 'JetBrains Mono';color:#fff`, diagCount:(dgn.critical+dgn.warn),
+        tileStyle:`width:34px;height:34px;flex:none;border-radius:8px;display:flex;align-items:center;justify-content:center;color:${color};background:${color}22`,
+        onDown:(e)=>this.onNodeDown(e,c.id)};
+    });
+    const edges=S.edges.map(e=>{
+      const a=byId[e.from],b=byId[e.to]; if(!a||!b)return null;
+      const x1=a.x+a.w/2,y1=a.y+NH/2,x2=b.x+b.w/2,y2=b.y+NH/2;
+      const dx=Math.max(30,Math.abs(x2-x1)*0.42);
+      const dd=`M ${x1} ${y1} C ${x1+dx} ${y1}, ${x2-dx} ${y2}, ${x2} ${y2}`;
+      const bad=broken.has(e.from)||broken.has(e.to)||aff.has(e.from)||aff.has(e.to);
+      const sel=S.selectedEdgeId===e.id;
+      const stroke=bad?'#ef4444':sel?accent:'rgba(148,163,184,.5)';
+      const bcol=bad?'#ef4444':(S.traffic>0?'#f59e0b':'#a5b4fc');
+      const isB=!!e.badge; const lbl=e.badge||e.protocol;
+      return {id:e.id,d:dd,stroke,cls:bad?'sds-anim-dash':(S.traffic>0?'sds-anim-flow':''),
+        badge:e.badge,protocol:e.protocol,mx:(x1+x2)/2,my:(y1+y2)/2,bidir:e.bidir,label:lbl,
+        chipStyle:`position:absolute;left:${(x1+x2)/2}px;top:${(y1+y2)/2}px;transform:translate(-50%,-50%);pointer-events:none;font:600 10px 'JetBrains Mono',monospace;padding:2px 7px;border-radius:20px;white-space:nowrap;`+(isB?`color:#0a0b0f;background:${bcol};box-shadow:0 2px 6px rgba(0,0,0,.45)`:`color:#9aa0b0;background:#12151c;border:1px solid rgba(255,255,255,.1)`),
+        onClick:()=>this.setState({selectedEdgeId:e.id,selectedId:null,menu:null})};
+    }).filter(Boolean);
+
+    const sc=S.comps.find(c=>c.id===S.selectedId)||null;
+    const se=S.edges.find(e=>e.id===S.selectedEdgeId)||null;
+    const KB=this.KB, m=this.loadMult();
+
+    // ---- global validation + score + cost (needs KB) ----
+    let diags=[], health=null, diagByNode={}, totalCost=0, selComp=null, selEdge=null, diagList=[];
+    if(KB){
+      const ctx=this.buildCtx();
+      diags=KB.runValidation(ctx);
+      diags.forEach(dg=>{ if(dg.nodeId){ diagByNode[dg.nodeId]=diagByNode[dg.nodeId]||{critical:0,warn:0,suggest:0}; diagByNode[dg.nodeId][dg.sev]++; } });
+      const sco=KB.scoreArchitecture(ctx,diags,m);
+      totalCost=S.comps.reduce((a,c)=>a+KB.specFor(c).cost(KB.cfgOf(c),m),0);
+      const spofs=S.comps.filter(c=>{const cfg=KB.cfgOf(c); return (c.cat==='Storage'||/Load Balancer|Redis|Kafka/.test(c.type)) && !((+cfg.replicas>0)||(+cfg.rf>1)||(+cfg.members>1)||cfg.multiAz);}).length;
+      const critN=diags.filter(x=>x.sev==='critical').length, warnN=diags.filter(x=>x.sev==='warn').length, sugN=diags.filter(x=>x.sev==='suggest').length;
+      const avail=(99+Math.min(0.99,(sco.dims.Availability-1)/4)).toFixed(sco.dims.Availability>4.5?3:2);
+      health={score:sco.overall, dims:Object.keys(sco.dims).map(k=>({k,v:sco.dims[k],pct:(sco.dims[k]/5*100)+'%',color:sco.dims[k]>=4?'#34d399':sco.dims[k]>=3?'#6366f1':sco.dims[k]>=2?'#f59e0b':'#ef4444'})),
+        crit:critN,warn:warnN,sug:sugN,cost:KB.cfgOf?totalCost:0, spofs,
+        p99: m>50?'~480 ms':m>6?'~120 ms':'~55 ms',
+        avail: '99.'+(sco.dims.Availability>=4.5?'99':sco.dims.Availability>=3.5?'95':sco.dims.Availability>=2.5?'9':'5')+'%',
+        maxTput: (Math.round((S.comps.filter(c=>c.cat==='Compute').length||1)*20)*Math.max(1,S.comps.filter(c=>/Load Balancer/.test(c.type)).length))+'K RPS',
+        mon:S.comps.some(c=>c.cat==='Monitoring'), backups:S.comps.some(c=>KB.cfgOf(c).backup), sec:critN===0,
+      };
+      const okS='font:600 11px \'JetBrains Mono\';color:#34d399', noS='font:600 11px \'JetBrains Mono\';color:#f59e0b';
+      const ov=sco.overall;
+      health.ringStyle=`conic-gradient(${ov>=4?'#34d399':ov>=3?'#6366f1':ov>=2?'#f59e0b':'#ef4444'} 0% ${ov/5*100}%,rgba(255,255,255,.08) ${ov/5*100}% 100%)`;
+      health.grade= ov>=4.3?'Production-ready':ov>=3.5?'Solid, with gaps':ov>=2.5?'Needs hardening':'Fragile — major risks';
+      health.gradeColor= ov>=4?'#34d399':ov>=3?'#a5b4fc':ov>=2?'#fcd34d':'#fca5a5';
+      health.spofColor= spofs>0?'#f59e0b':'#34d399';
+      health.monLabel=health.mon?'Present':'Missing'; health.monStyle=health.mon?okS:noS;
+      health.backupLabel=health.backups?'Enabled':'None'; health.backupStyle=health.backups?okS:noS;
+      health.secLabel=health.sec?'Clear':(critN+' issue'+(critN>1?'s':'')); health.secStyle=health.sec?okS:'font:600 11px \'JetBrains Mono\';color:#ef4444';
+    }
+    const sevColor={critical:'#ef4444',warn:'#f59e0b',suggest:'#818cf8'};
+    diagList=diags.map(dg=>({...dg, color:sevColor[dg.sev], badge:dg.sev==='critical'?'CRITICAL':dg.sev==='warn'?'WARNING':'SUGGEST',
+      select:dg.nodeId?()=>this.setState({selectedId:dg.nodeId,selectedEdgeId:null,problemsOpen:true}):()=>{}}));
+
+    // ---- rich inspector for selected component ----
+    if(sc && KB){
+      const spec=KB.specFor(sc), cfg=KB.cfgOf(sc);
+      const extra=[{id:'metrics',label:'Metrics'},{id:'failure',label:'Failure'},{id:'cost',label:'Cost'},{id:'tips',label:'Interview'}];
+      const tabDefs=[...spec.tabs.map(t=>({id:t.id,label:t.label})),...extra];
+      const activeId=tabDefs.some(t=>t.id===S.inspectorTab)?S.inspectorTab:'general';
+      const tabs=tabDefs.map(t=>({id:t.id,label:t.label,active:t.id===activeId,
+        style:`padding:7px 10px;font-size:12px;font-weight:${t.id===activeId?600:500};color:${t.id===activeId?'#e6e8ee':'#8a8f9e'};border-bottom:2px solid ${t.id===activeId?'#6366f1':'transparent'};cursor:pointer;white-space:nowrap`,
+        select:()=>this.setInspectorTab(t.id)}));
+      const at=spec.tabs.find(t=>t.id===activeId);
+      const groups=at?at.groups.map(g=>({title:g.title,fields:g.fields.map(f=>this.fieldVM(f,sc,cfg))})):[];
+      const metrics=spec.metrics(cfg,m).map(x=>({l:x.l,val:x.v+(x.unit||''),pct:Math.round(cl01(x.bar)*100)+'%',color:x.warn?'#f59e0b':'#6366f1',warn:!!x.warn}));
+      const tips=spec.tips, fm=spec.failure;
+      const nodeCost=spec.cost(cfg,m);
+      const dg=diagByNode[sc.id]||{critical:0,warn:0,suggest:0};
+      selComp={id:sc.id,cat:sc.cat,color:catColor[sc.cat],iconEl:this.iconFor(sc,20),name:sc.type,blurb:spec.blurb,
+        tabs,activeId, isConfig:!!at, isMetrics:activeId==='metrics',isFailure:activeId==='failure',isCost:activeId==='cost',isTips:activeId==='tips',
+        groups, metrics, tips, failureModes:fm, nodeCost:money(nodeCost),
+        diagN:dg.critical+dg.warn, diagCritical:dg.critical>0,
+        breakLabel:S.broken.includes(sc.id)?'Restore component':'Break this component',
+        nameVal:sc.type, onName:(e)=>this.editComp('name',e.target.value),
+        breakThis:()=>this.breakComp(sc.id), isBroken:S.broken.includes(sc.id)};
+    }
+    if(se){ const ep=se; const g=(k,dv)=>ep[k]!=null&&ep[k]!==''?ep[k]:dv;
+      selEdge={id:se.id,protocol:se.protocol||'HTTP',badge:se.badge||'',bidir:!!se.bidir,
+        serializer:g('serializer','JSON'),tls:!!se.tls,compression:!!se.compression,cb:se.cb!==false,
+        retries:g('retries','2'),timeout:g('timeout','3000'),pool:g('pool','200'),
+        protocols:(KB?KB.EDGE_PROTOCOLS:['HTTP','gRPC','TCP']),serializers:(KB?KB.EDGE_SERIALIZERS:['JSON']) }; }
+
+
+    const palette=d.PALETTE.map(g=>({cat:g.cat,color:g.color,items:g.items.map(it=>({name:it,color:g.color,cat:g.cat,iconEl:this.icon(it,16),onDown:(e)=>this.onPaletteDown(e,{name:it,color:g.color,cat:g.cat})}))}));
+    const curQ=d.QUESTIONS.find(x=>x.id===S.question)||d.QUESTIONS[0];
+    const qspec=d.QUESTION_SPEC[S.question]||d.QUESTION_SPEC.twitter;
+
+    const scorePresets=Object.keys(S.scores);
+    const reviewRows=scorePresets.map(k=>{ const v=S.scores[k]; return {key:k,value:v,dots:[1,2,3,4,5].map(n=>({n,set:()=>this.setState(s=>({scores:{...s.scores,[k]:n}})),style:`width:15px;height:15px;border-radius:5px;cursor:pointer;transition:background .1s;background:${n<=v?'#6366f1':'rgba(255,255,255,.1)'}`}))}; });
+    const avg=(scorePresets.reduce((a,k)=>a+S.scores[k],0)/scorePresets.length).toFixed(1);
+    const reviewComps=S.comps.map(c=>({name:c.type,cat:c.cat,color:catColor[c.cat]||'#818cf8',iconEl:this.iconFor(c,15)}));
+
+    const constraintPresets=['Users: 1M → 100M','Latency: 500ms → 50ms','Must support multi-region','Switch to strong consistency','GDPR data residency','Add offline support','Cut infra cost 40%'];
+
+    return {...base, questions, stats, palette, setupQuestionTitle:setupQuestion.title,
+      curTitle:curQ.title, curDiff:curQ.diff, curDiffColor:diffColor[curQ.diff], qspec, questionOpen:S.questionOpen,
+      nodes, edges, comments:S.comments,
+      layerStyle:{transform:`translate(${S.pan.x}px,${S.pan.y}px) scale(${S.zoom})`,transformOrigin:'0 0',position:'absolute',top:0,left:0,width:'100%',height:'100%'},
+      tool:S.tool, zoom:Math.round(S.zoom*100), traffic:S.traffic, menu:S.menu, aiOpen:S.aiOpen, connecting:S.tool==='connector',
+      selComp, selEdge, hasSel:!!(sc||se),
+      loadLabel:(S.traffic===0?'baseline':'×'+S.traffic),
+      diagList, problemsOpen:S.problemsOpen, toggleProblems:()=>this.setState(s=>({problemsOpen:!s.problemsOpen})),
+      diagCrit:diags.filter(x=>x.sev==='critical').length, diagWarn:diags.filter(x=>x.sev==='warn').length, diagSug:diags.filter(x=>x.sev==='suggest').length,
+      noDiags:diags.length===0, problemsBorder:S.problemsOpen?'rgba(99,102,241,.45)':'transparent',
+      health, totalCostLabel:money(totalCost),
+      scenarios:[
+        {id:'redis',label:'Redis goes down'},{id:'kafka',label:'Kafka broker dies'},{id:'db',label:'Database outage'},
+        {id:'region',label:'Region outage'},{id:'az',label:'AZ outage'},{id:'spike',label:'Traffic spike ×1000'},
+        {id:'flash',label:'Flash sale'},{id:'hot',label:'Hot partition'},{id:'slow',label:'Slow DB'},
+        {id:'stampede',label:'Cache stampede'},{id:'retry',label:'Retry storm'},
+      ].map(x=>({...x,run:()=>this.injectScenario(x)})),
+      menuInjectOpen:S.menu==='inject', menuInject:()=>this.openMenu('inject'),
+      sInject:`display:flex;align-items:center;gap:7px;height:34px;padding:0 11px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;border:1px solid ${S.menu==='inject'?'rgba(239,68,68,.5)':'rgba(255,255,255,.09)'};background:${S.menu==='inject'?'rgba(239,68,68,.14)':'transparent'};color:${S.menu==='inject'?'#fca5a5':'#c5c8d2'}`,
+      onEdgeField2:(e)=>{ const k=e.target.name, v=e.target.type==='checkbox'?e.target.checked:e.target.value; this.editEdge(k,v); },
+      constraints:S.constraints.map(k=>({...k,remove:()=>this.removeConstraint(k.id)})),
+      constraintPresets:constraintPresets.map(t=>({text:t,add:()=>this.addConstraint(t)})),
+      nodeCount:S.comps.length, edgeCount:S.edges.length, questionClosed:!S.questionOpen, noSel:!(sc||se),
+      timer:this.fmtTimer(),
+      reviewMetrics:this.reviewMetrics(), reviewRows, reviewAvg:avg, reviewComps,
+      canvasRef:this.canvasRef,
+      sPointer:tb(S.tool==='pointer'),sPan:tb(S.tool==='pan'),sConnector:tb(S.tool==='connector'),sComment:tb(S.tool==='comment'),sLatency:tb(S.showLatency),
+      sFailure:`display:flex;align-items:center;gap:7px;height:34px;padding:0 11px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;border:1px solid ${S.tool==='failure'?'rgba(239,68,68,.5)':'rgba(255,255,255,.09)'};background:${S.tool==='failure'?'rgba(239,68,68,.16)':'transparent'};color:${S.tool==='failure'?'#fca5a5':'#c5c8d2'}`,
+      sTraffic:`display:flex;align-items:center;gap:7px;height:34px;padding:0 11px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;border:1px solid ${S.traffic>0?'rgba(245,158,11,.5)':'rgba(255,255,255,.09)'};background:${S.traffic>0?'rgba(245,158,11,.16)':'transparent'};color:${S.traffic>0?'#fcd34d':'#c5c8d2'}`,
+      sScale:`display:flex;align-items:center;gap:7px;height:34px;padding:0 11px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;border:1px solid ${S.menu==='scale'?'rgba(99,102,241,.5)':'rgba(255,255,255,.09)'};background:transparent;color:#c5c8d2`,
+      menuTrafficOpen:S.menu==='traffic',menuScaleOpen:S.menu==='scale',trafficLabel:S.traffic>0?('×'+S.traffic):'Traffic',
+      canvasCursor:(S.tool==='comment'||S.tool==='connector'||S.tool==='failure')?'crosshair':'grab',
+      onField:(e)=>this.editComp(e.target.name,e.target.value),
+      onEdgeField:(e)=>this.editEdge(e.target.name,e.target.type==='checkbox'?e.target.checked:e.target.value),
+      aiHints:[{t:'Potential SPOF',d:'Redis cache has no replica — its failure drops all timeline reads.',c:'#fb7185'},{t:'Missing component',d:'No rate limiter sits between the gateway and services.',c:'#818cf8'},{t:'Bottleneck',d:'Cassandra write path may saturate near 40K W/s without batching.',c:'#f59e0b'},{t:'Scaling hint',d:'Consider fan-out-on-write for non-celebrity users, pull for the rest.',c:'#34d399'}],
+      toolPointer:()=>this.setTool('pointer'), toolPan:()=>this.setTool('pan'), toolConnector:()=>this.setTool('connector'), toolComment:()=>this.setTool('comment'), toolFailure:()=>this.setTool('failure'),
+      menuTraffic:()=>this.openMenu('traffic'), menuScale:()=>this.openMenu('scale'),
+      traffic100:()=>this.setTraffic(100), traffic1000:()=>this.setTraffic(1000), traffic10000:()=>this.setTraffic(10000),
+      zoomIn:()=>this.zoomBy(1.2), zoomOut:()=>this.zoomBy(1/1.2),
+      setTool:(t)=>this.setTool(t), openMenu:(m)=>this.openMenu(m),
+      onCanvasDown:(e)=>this.onCanvasDown(e),
+      setTraffic:(n)=>this.setTraffic(n), resetSim:()=>this.resetSim(),
+      addConstraint:(t)=>this.addConstraint(t), removeConstraint:(id)=>this.setState(s=>({constraints:s.constraints.filter(c=>c.id!==id)})),
+      editComp:(k,v)=>this.editComp(k,v), editEdge:(k,v)=>this.editEdge(k,v), del:()=>this.deleteSel(),
+      zoomBy:(f)=>this.zoomBy(f), resetView:()=>this.setState({pan:{x:0,y:0},zoom:1}),
+      toggleQ:()=>this.setState(s=>({questionOpen:!s.questionOpen})), toggleAI:()=>this.setState(s=>({aiOpen:!s.aiOpen})),
+      toggleLatency:()=>this.setState(s=>({showLatency:!s.showLatency})),
+      undo:()=>this.undo(), redo:()=>this.redo(),
+      enterReview:()=>this.setState({screen:'review'}), backToWs:()=>this.setState({screen:'workspace'}),
+    };
+  }
+}
+</script>
+</body>
+</html>

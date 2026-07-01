@@ -1,0 +1,12 @@
+.DS_Store
+.vscode/
+node_modules/
+dist/
+.worktrees/
+worktrees/
+npm-debug.log*
+.env
+.env.*
+!.env.example
+SystemDesign Studio.html
+SystemDesign Studio Platform/.thumbnail
