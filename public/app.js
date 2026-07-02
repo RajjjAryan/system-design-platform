@@ -19,7 +19,7 @@ const esc = (value) => String(value ?? '')
 
 const categoryColor = Object.fromEntries(PALETTE.map((group) => [group.cat, group.color]));
 
-class SystemDesignStudio {
+export class SystemDesignStudio {
   constructor(root) {
     this.root = root;
     this.state = {
@@ -841,6 +841,10 @@ class SystemDesignStudio {
   }
 }
 
-const root = $('#app');
-const app = new SystemDesignStudio(root);
-app.mount();
+if (typeof document !== 'undefined') {
+  const root = $('#app');
+  if (root) {
+    const app = new SystemDesignStudio(root);
+    app.mount();
+  }
+}

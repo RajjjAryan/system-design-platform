@@ -10,6 +10,8 @@ const requiredFiles = [
   'public/index.html',
   'public/styles.css',
   'public/app.js',
+  'public/sds-data.js',
+  'public/sds-knowledge.js',
   'server/index.js',
   'scripts/build.mjs',
   'scripts/validate-artifact.mjs',
@@ -53,6 +55,9 @@ for (const snippet of [
 }
 
 assert.doesNotMatch(app, /\bTODO\b|TBD|mock only|placeholder/i, 'App source must not contain placeholder markers');
+
+const appModule = await import('../public/app.js?source-test=' + Date.now());
+assert.equal(typeof appModule.SystemDesignStudio, 'function', 'App module must be importable and export SystemDesignStudio');
 
 const worker = read('server/index.js');
 assert.ok(worker.includes('export default'), 'Worker must be an ESM default export');
