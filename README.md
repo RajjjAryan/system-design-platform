@@ -31,12 +31,12 @@ scripts/
   validate-artifact.mjs
 tests/
   *.test.mjs        Node test suite
-SystemDesign Studio Platform/
+public/
   sds-data.js       Component palette, questions, seed architecture
   sds-knowledge.js  Inspector schemas, metrics, cost, diagnostics, scoring
 ```
 
-The old exported prototype is kept for reference. The production app lives in `public/` and uses the shared data and knowledge modules during build.
+The production app lives in `public/` and is self-contained for static hosting.
 
 ## Local Development
 

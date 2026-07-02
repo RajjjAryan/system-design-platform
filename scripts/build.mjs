@@ -52,8 +52,6 @@ ensureDir(server);
 ensureDir(openai);
 
 copyDir(join(root, 'public'), client);
-copyFile(join(root, 'SystemDesign Studio Platform', 'sds-data.js'), join(client, 'sds-data.js'));
-copyFile(join(root, 'SystemDesign Studio Platform', 'sds-knowledge.js'), join(client, 'sds-knowledge.js'));
 copyFile(join(root, '.openai', 'hosting.json'), join(openai, 'hosting.json'));
 
 const assetEntries = walk(client).map((file) => {

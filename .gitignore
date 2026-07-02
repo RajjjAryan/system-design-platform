@@ -9,4 +9,3 @@ npm-debug.log*
 .env.*
 !.env.example
 SystemDesign Studio.html
-SystemDesign Studio Platform/.thumbnail
