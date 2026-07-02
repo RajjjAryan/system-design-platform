@@ -5,6 +5,7 @@ const required = [
   'dist/server/index.js',
   'dist/.openai/hosting.json',
   'dist/client/index.html',
+  'dist/client/runtime-config.js',
   'dist/client/styles.css',
   'dist/client/app.js',
   'dist/client/sds-data.js',

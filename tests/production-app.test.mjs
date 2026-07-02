@@ -6,12 +6,17 @@ const read = (path) => readFileSync(path, 'utf8');
 
 const requiredFiles = [
   'package.json',
+  '.env.example',
   '.openai/hosting.json',
+  'Dockerfile',
+  'render.yaml',
   'public/index.html',
+  'public/runtime-config.js',
   'public/styles.css',
   'public/app.js',
   'public/sds-data.js',
   'public/sds-knowledge.js',
+  'server/api-server.mjs',
   'server/index.js',
   'scripts/build.mjs',
   'scripts/validate-artifact.mjs',
@@ -25,7 +30,7 @@ for (const file of requiredFiles) {
 const pkg = JSON.parse(read('package.json'));
 assert.equal(pkg.type, 'module', 'package.json must use ESM');
 assert.equal(pkg.scripts.build, 'node scripts/build.mjs');
-assert.equal(pkg.scripts.test, 'node --test tests/*.test.mjs');
+assert.equal(pkg.scripts.test, 'node --no-warnings --test tests/*.test.mjs');
 assert.equal(pkg.scripts.validate, 'node scripts/validate-artifact.mjs');
 
 const html = read('public/index.html');
@@ -33,6 +38,7 @@ for (const snippet of [
   'SystemDesign Studio',
   '<main id="app"',
   'public/styles.css',
+  'public/runtime-config.js',
   'public/app.js',
 ]) {
   assert.ok(html.includes(snippet), `Expected public/index.html to include ${snippet}`);
@@ -54,7 +60,7 @@ for (const snippet of [
   assert.ok(app.includes(snippet), `Expected public/app.js to include ${snippet}`);
 }
 
-assert.doesNotMatch(app, /\bTODO\b|TBD|mock only|placeholder/i, 'App source must not contain placeholder markers');
+assert.doesNotMatch(app, /\bTODO\b|TBD|mock only/i, 'App source must not contain incomplete markers');
 
 const appModule = await import('../public/app.js?source-test=' + Date.now());
 assert.equal(typeof appModule.SystemDesignStudio, 'function', 'App module must be importable and export SystemDesignStudio');

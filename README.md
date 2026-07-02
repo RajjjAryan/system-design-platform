@@ -5,7 +5,10 @@ SystemDesign Studio is a production architecture simulator for system design int
 ## What Is Included
 
 - Public dashboard and create-interview flow
-- Candidate link generation screen
+- Password signup/login backed by the Node API
+- User-specific interview dashboard
+- Server-backed candidate/interviewer/panel share links
+- Role-specific screen visibility for candidates, interviewers, and panels
 - Interactive architecture workspace
 - Drag-and-drop component palette
 - Selectable nodes and edges
@@ -15,6 +18,7 @@ SystemDesign Studio is a production architecture simulator for system design int
 - Failure injection for Redis, Kafka, database, and traffic spikes
 - Interviewer-only AI hints panel
 - Frozen review mode with scorecard and final feedback
+- SQLite-backed interview persistence for the full-stack server
 - Buildless ESM Worker artifact for static hosting
 
 ## Repository Structure
@@ -22,25 +26,58 @@ SystemDesign Studio is a production architecture simulator for system design int
 ```text
 public/
   index.html        Browser entrypoint
+  runtime-config.js Frontend API origin configuration
   styles.css        Product UI system
   app.js            Vanilla JS single-page application
+  sds-data.js       Component palette, full question specs, seed architecture
+  sds-knowledge.js  Inspector schemas, metrics, cost, diagnostics, scoring
 server/
-  index.js          Source Worker contract
+  api-server.mjs    Node API + static server for full product mode
+  index.js          Source Worker contract for static artifact compatibility
+Dockerfile          Container for full-stack deployment
+render.yaml         Render blueprint with persistent SQLite disk
 scripts/
   build.mjs         Builds dist/client and dist/server/index.js
   validate-artifact.mjs
 tests/
   *.test.mjs        Node test suite
-public/
-  sds-data.js       Component palette, questions, seed architecture
-  sds-knowledge.js  Inspector schemas, metrics, cost, diagnostics, scoring
 ```
 
-The production app lives in `public/` and is self-contained for static hosting.
+The full product path is the Node API server in `server/api-server.mjs`. The static artifact still exists for GitHub Pages/static hosting, but real login, persistence, and share-link enforcement require the API.
 
 ## Local Development
 
 No dependency install is required.
+
+```sh
+npm test
+npm run api
+```
+
+Open the full-stack app:
+
+```text
+http://127.0.0.1:8787
+```
+
+Use these environment variables for deployed API instances:
+
+```sh
+PORT=8787
+SDS_DB_PATH=.data/systemdesign.sqlite
+SDS_TOKEN_SECRET=replace-with-a-long-random-secret
+SDS_PUBLIC_ORIGIN=https://rajjjaryan.github.io/system-design-platform/
+```
+
+For frontend-only GitHub Pages, set `public/runtime-config.js` to the deployed API origin:
+
+```js
+window.SDS_CONFIG = {
+  apiBaseUrl: 'https://your-api.example.com',
+};
+```
+
+Static preview remains available:
 
 ```sh
 npm test
@@ -75,15 +112,18 @@ dist/
 
 ## Launch Notes
 
-This repo is ready for a static Worker-style hosting path. Before a public launch, decide the final hosting provider and domain, then deploy the `dist/` artifact created from a verified build.
+This repo now has a real backend-compatible launch path:
 
-For a public internet launch, the next production hardening layer should include:
+- Host the Node API (`npm start`) on a persistent Node 24 runtime with a mounted volume for `SDS_DB_PATH`.
+- Use `Dockerfile` directly, or import `render.yaml` on Render and set `SDS_PUBLIC_ORIGIN` to the frontend URL.
+- Keep `SDS_TOKEN_SECRET` private and rotate it before production traffic.
+- Point GitHub Pages `public/runtime-config.js` at the deployed API, or serve the frontend from the Node API for same-origin deployment.
+- Keep GitHub Pages for the frontend only; it cannot provide server-side auth, durable storage, or role enforcement by itself.
 
-- Real authentication and session ownership if user accounts are required
-- Durable interview/session storage if users need cross-device persistence
-- Server-side sharing tokens for candidate links
+Before broad public launch, add:
+
+- Managed Postgres or another hosted database instead of SQLite if multiple app instances are needed
+- Email verification and password reset
 - Privacy policy and terms pages
 - Error monitoring and analytics
 - Abuse protection on public sharing routes
-
-The current product is intentionally client-only and suitable for public MVP launch/demo without storing user data on a backend.

@@ -135,6 +135,15 @@ button {
   border-color: var(--border-strong);
 }
 
+.btn:disabled,
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .btn.primary {
   color: white;
   background: var(--accent);
@@ -273,6 +282,67 @@ button {
   color: var(--muted);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pill-button {
+  cursor: pointer;
+}
+
+.pill-button.active,
+.role-pill {
+  color: var(--accent-soft);
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.16);
+}
+
+.auth-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+
+.auth-shell {
+  width: min(480px, calc(100vw - 32px));
+  padding: 24px 0;
+}
+
+.auth-panel {
+  padding: 26px;
+}
+
+.auth-brand {
+  margin-bottom: 24px;
+}
+
+.empty-state {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  align-items: start;
+}
+
+.visibility-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.visibility-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.visibility-row strong {
+  color: var(--text-2);
+  text-align: right;
 }
 
 .mono-label {

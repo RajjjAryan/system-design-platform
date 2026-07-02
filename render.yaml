@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: systemdesign-studio-api
+    runtime: docker
+    plan: starter
+    disk:
+      name: systemdesign-studio-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8787
+      - key: SDS_DB_PATH
+        value: /var/data/systemdesign.sqlite
+      - key: SDS_PUBLIC_ORIGIN
+        sync: false
+      - key: SDS_TOKEN_SECRET
+        generateValue: true

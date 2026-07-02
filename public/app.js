@@ -19,43 +19,358 @@ const esc = (value) => String(value ?? '')
 
 const categoryColor = Object.fromEntries(PALETTE.map((group) => [group.cat, group.color]));
 
-export class SystemDesignStudio {
-  constructor(root) {
-    this.root = root;
-    this.state = {
-      screen: 'dashboard',
-      question: 'twitter',
-      comps: SEED.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
-      edges: SEED.edges.map((edge) => ({ ...edge })),
-      selectedId: null,
-      selectedEdgeId: null,
-      inspectorTab: 'general',
-      broken: [],
-      traffic: 0,
-      constraints: [],
-      problemsOpen: false,
-      aiOpen: false,
-      candidateLink: 'https://systemdesign.studio/i/twitter-priya',
-      scores: {
-        Scalability: 4,
-        Availability: 3,
-        Reliability: 3,
-        Communication: 4,
-        Tradeoffs: 3,
-        'Database choice': 4,
-        Caching: 3,
-        'Load balancing': 4,
-        Observability: 2,
-        Security: 3,
+const STORAGE_KEYS = {
+  user: 'sds.currentUser',
+  sessions: 'sds.sessions',
+  token: 'sds.apiToken',
+};
+
+export const DEFAULT_PERMISSIONS = {
+  allowCandidateEdit: true,
+  diagnosticsDuringInterview: true,
+  showHealthToCandidate: false,
+  allowFailureInjection: true,
+  aiHintsInterviewerOnly: true,
+  candidateCanViewQuestion: true,
+  panelCanViewReview: true,
+};
+
+const ROLE_LABELS = {
+  interviewer: 'Interviewer',
+  candidate: 'Candidate',
+  panel: 'Panel',
+};
+
+const DEFAULT_LOGIN = { name: '', email: '' };
+
+const runtimeConfig = typeof window !== 'undefined' ? (window.SDS_CONFIG || {}) : {};
+
+class ApiClient {
+  constructor({ baseUrl = runtimeConfig.apiBaseUrl || '', storage = null } = {}) {
+    this.baseUrl = String(baseUrl || '').replace(/\/$/, '');
+    this.storage = storage;
+  }
+
+  token() {
+    try {
+      return this.storage?.getItem(STORAGE_KEYS.token) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  setToken(token) {
+    try {
+      if (token) this.storage?.setItem(STORAGE_KEYS.token, token);
+      else this.storage?.removeItem(STORAGE_KEYS.token);
+    } catch {
+      // Storage can be blocked by browser policy.
+    }
+  }
+
+  async request(path, { method = 'GET', body, token = this.token() } = {}) {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
-      toast: '',
+      credentials: 'include',
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await response.text();
+    let payload = null;
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+      const error = new Error('API is not reachable. Configure runtime-config.js with the deployed API URL.');
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.ok) {
+      const error = new Error(payload?.error || `Request failed with ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  }
+
+  signup(body) {
+    return this.request('/api/auth/signup', { method: 'POST', body, token: '' });
+  }
+
+  login(body) {
+    return this.request('/api/auth/login', { method: 'POST', body, token: '' });
+  }
+
+  me() {
+    return this.request('/api/me');
+  }
+
+  interviews() {
+    return this.request('/api/interviews');
+  }
+
+  createInterview(body) {
+    return this.request('/api/interviews', { method: 'POST', body });
+  }
+
+  shareInterview(id) {
+    return this.request(`/api/interviews/${encodeURIComponent(id)}/share`, { method: 'POST' });
+  }
+
+  share(token) {
+    return this.request(`/api/share/${encodeURIComponent(token)}`, { token: '' });
+  }
+}
+
+function safeJsonParse(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function questionById(questionId) {
+  return QUESTIONS.find((question) => question.id === questionId) || QUESTIONS[0];
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function firstName(nameOrEmail) {
+  const value = String(nameOrEmail || '').trim();
+  if (!value) return 'there';
+  return value.split(/\s|@/)[0] || value;
+}
+
+function slugify(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'session';
+}
+
+function shortId(prefix = 'sds') {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function encodePayload(payload) {
+  const json = JSON.stringify(payload);
+  if (typeof Buffer !== 'undefined') return Buffer.from(json, 'utf8').toString('base64url');
+  const bytes = new TextEncoder().encode(json);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+}
+
+function decodePayload(value) {
+  if (typeof Buffer !== 'undefined') return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+  const padded = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function normalizeUser(user) {
+  if (!user) return null;
+  const email = normalizeEmail(user.email);
+  const name = String(user.name || email || '').trim();
+  if (!name && !email) return null;
+  return { name: name || email, email };
+}
+
+function normalizeSession(session) {
+  if (!session) return null;
+  const question = questionById(session.questionId);
+  return {
+    id: session.id || shortId('session'),
+    title: session.title || question.title,
+    questionId: session.questionId || question.id,
+    prompt: session.prompt || QUESTION_SPEC[question.id]?.statement || question.tagline,
+    owner: normalizeUser(session.owner) || { name: 'Interviewer', email: '' },
+    candidate: {
+      name: String(session.candidate?.name || 'Candidate').trim(),
+      email: normalizeEmail(session.candidate?.email),
+    },
+    difficulty: session.difficulty || question.diff,
+    duration: Number(session.duration || question.dur),
+    status: session.status || 'draft',
+    permissions: { ...DEFAULT_PERMISSIONS, ...(session.permissions || {}) },
+    updatedAt: session.updatedAt || new Date().toISOString(),
+    createdAt: session.createdAt || session.updatedAt || new Date().toISOString(),
+  };
+}
+
+function readStorage(storage, key, fallback) {
+  if (!storage) return fallback;
+  try {
+    return safeJsonParse(storage.getItem(key), fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorage(storage, key, value) {
+  if (!storage) return;
+  try {
+    storage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can be unavailable in strict/private browser contexts.
+  }
+}
+
+export function createDefaultDraft(user = null, questionId = 'twitter') {
+  const question = questionById(questionId);
+  return {
+    questionId: question.id,
+    questionMode: 'preset',
+    customPrompt: '',
+    candidateName: '',
+    candidateEmail: '',
+    difficulty: question.diff,
+    duration: question.dur,
+    permissions: { ...DEFAULT_PERMISSIONS },
+    ownerEmail: normalizeEmail(user?.email),
+  };
+}
+
+export function createSessionFromDraft({ user, draft, questionId = draft?.questionId || 'twitter' }) {
+  const question = questionById(questionId);
+  const spec = QUESTION_SPEC[question.id] || QUESTION_SPEC.twitter;
+  const now = new Date().toISOString();
+  const candidateName = String(draft?.candidateName || '').trim() || 'Candidate';
+  return normalizeSession({
+    id: draft?.sessionId || shortId(slugify(`${question.id}-${candidateName}`)),
+    title: draft?.questionMode === 'custom' && draft?.customPrompt
+      ? `Custom ${question.title}`
+      : question.title,
+    questionId: question.id,
+    prompt: draft?.questionMode === 'custom' && draft?.customPrompt
+      ? String(draft.customPrompt).trim()
+      : spec.statement,
+    owner: normalizeUser(user) || { name: 'Interviewer', email: '' },
+    candidate: {
+      name: candidateName,
+      email: normalizeEmail(draft?.candidateEmail),
+    },
+    difficulty: draft?.difficulty || question.diff,
+    duration: Number(draft?.duration || question.dur),
+    permissions: { ...DEFAULT_PERMISSIONS, ...(draft?.permissions || {}) },
+    status: 'in-progress',
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+export function buildShareUrl({ baseUrl, role, session }) {
+  const url = new URL(baseUrl || 'https://systemdesign.studio/');
+  url.hash = '';
+  url.search = '';
+  url.searchParams.set('role', role || 'candidate');
+  url.searchParams.set('invite', encodePayload({ v: 1, session: normalizeSession(session) }));
+  return url.toString();
+}
+
+export function parseSharedInvite(location) {
+  const url = location instanceof URL ? location : new URL(location?.href || String(location || 'https://systemdesign.studio/'));
+  const invite = url.searchParams.get('invite');
+  if (!invite) return null;
+  try {
+    const payload = decodePayload(invite);
+    const session = normalizeSession(payload.session || payload);
+    if (!session) return null;
+    return {
+      role: url.searchParams.get('role') || payload.role || 'candidate',
+      session,
     };
+  } catch {
+    return null;
+  }
+}
+
+export function createInitialState({ storage, location } = {}) {
+  const currentUser = normalizeUser(readStorage(storage, STORAGE_KEYS.user, null));
+  const sessions = readStorage(storage, STORAGE_KEYS.sessions, []).map(normalizeSession).filter(Boolean);
+  const url = location instanceof URL ? location : new URL(location?.href || String(location || 'https://systemdesign.studio/'));
+  const pendingInvite = parseSharedInvite(url);
+  const pendingShareToken = url.searchParams.get('share') || '';
+  const activeSession = pendingInvite?.session || sessions[0] || null;
+  const question = activeSession?.questionId || 'twitter';
+  const draft = createDefaultDraft(currentUser, question);
+  if (activeSession) {
+    draft.sessionId = activeSession.id;
+    draft.candidateName = activeSession.candidate.name;
+    draft.candidateEmail = activeSession.candidate.email;
+    draft.difficulty = activeSession.difficulty;
+    draft.duration = activeSession.duration;
+    draft.permissions = { ...DEFAULT_PERMISSIONS, ...activeSession.permissions };
+    draft.customPrompt = activeSession.prompt || '';
+  }
+
+  return {
+    screen: currentUser ? ((pendingInvite || pendingShareToken) ? 'join' : 'dashboard') : 'login',
+    currentUser,
+    authMode: 'signup',
+    login: currentUser ? { name: currentUser.name, email: currentUser.email, password: '' } : { ...DEFAULT_LOGIN, password: '' },
+    pendingInvite,
+    pendingShareToken,
+    visibility: null,
+    sessions: pendingInvite ? [pendingInvite.session, ...sessions.filter((session) => session.id !== pendingInvite.session.id)] : sessions,
+    activeSessionId: activeSession?.id || null,
+    role: pendingInvite?.role || 'interviewer',
+    rolePreview: null,
+    draft,
+    question,
+    shareLinks: {},
+    candidateLink: '',
+    interviewerLink: '',
+    comps: [],
+    edges: [],
+    selectedId: null,
+    selectedEdgeId: null,
+    inspectorTab: 'general',
+    broken: [],
+    traffic: 0,
+    constraints: [],
+    problemsOpen: false,
+    aiOpen: false,
+    tool: 'select',
+    scores: {
+      Scalability: 4,
+      Availability: 3,
+      Reliability: 3,
+      Communication: 4,
+      Tradeoffs: 3,
+      'Database choice': 4,
+      Caching: 3,
+      'Load balancing': 4,
+      Observability: 2,
+      Security: 3,
+    },
+    toast: '',
+  };
+}
+
+export class SystemDesignStudio {
+  constructor(root, options = {}) {
+    this.root = root;
+    this.storage = options.storage || (typeof window !== 'undefined' ? window.localStorage : null);
+    this.location = options.location || (typeof window !== 'undefined' ? window.location : new URL('https://systemdesign.studio/'));
+    this.navigator = options.navigator || (typeof window !== 'undefined' ? window.navigator : null);
+    this.api = options.api || new ApiClient({ baseUrl: options.apiBaseUrl, storage: this.storage });
+    this.state = createInitialState({ storage: this.storage, location: this.location });
     this.drag = null;
   }
 
   mount() {
-    this.root.addEventListener('click', (event) => this.handleClick(event));
+    this.root.addEventListener('click', (event) => { void this.handleClick(event); });
     this.root.addEventListener('change', (event) => this.handleChange(event));
+    this.root.addEventListener('input', (event) => this.handleInput(event));
     this.root.addEventListener('dragstart', (event) => this.handleDragStart(event));
     this.root.addEventListener('dragover', (event) => {
       if (event.target.closest('[data-canvas]')) event.preventDefault();
@@ -65,6 +380,7 @@ export class SystemDesignStudio {
     window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
     window.addEventListener('pointerup', () => { this.drag = null; });
     this.render();
+    void this.bootstrapFromApi();
   }
 
   setState(patch) {
@@ -72,19 +388,167 @@ export class SystemDesignStudio {
     this.render();
   }
 
-  seedFor(question) {
-    if (question !== 'twitter') return { comps: [], edges: [] };
+  baseUrl() {
+    const href = this.location?.href || 'https://systemdesign.studio/';
+    const url = new URL(href);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  }
+
+  saveUser(user) {
+    writeStorage(this.storage, STORAGE_KEYS.user, user);
+  }
+
+  saveSessions(sessions = this.state.sessions) {
+    writeStorage(this.storage, STORAGE_KEYS.sessions, sessions.map(normalizeSession).filter(Boolean));
+  }
+
+  async bootstrapFromApi() {
+    try {
+      if (this.state.pendingShareToken) {
+        const invite = await this.api.share(this.state.pendingShareToken);
+        const session = normalizeSession(invite.interview);
+        this.setState({
+          pendingInvite: { role: invite.role, session },
+          role: invite.role,
+          visibility: invite.visibility,
+          sessions: [session, ...this.state.sessions.filter((item) => item.id !== session.id)],
+          activeSessionId: session.id,
+          screen: this.state.currentUser ? 'join' : 'login',
+        });
+      }
+
+      if (!this.api.token()) return;
+      const me = await this.api.me();
+      const list = await this.api.interviews();
+      const user = normalizeUser(me.user);
+      const sessions = list.interviews.map(normalizeSession).filter(Boolean);
+      this.saveUser(user);
+      this.saveSessions(sessions);
+      this.setState({
+        currentUser: user,
+        login: { name: user.name, email: user.email, password: '' },
+        sessions: this.state.pendingInvite
+          ? [this.state.pendingInvite.session, ...sessions.filter((session) => session.id !== this.state.pendingInvite.session.id)]
+          : sessions,
+        activeSessionId: this.state.activeSessionId || sessions[0]?.id || null,
+        screen: this.state.pendingInvite ? 'join' : this.state.screen === 'login' ? 'dashboard' : this.state.screen,
+      });
+    } catch (error) {
+      if (error.status === 401) this.api.setToken('');
+      if (this.state.screen !== 'login') this.toast(error.message);
+    }
+  }
+
+  activeSession() {
+    return this.state.sessions.find((session) => session.id === this.state.activeSessionId) || null;
+  }
+
+  upsertSession(session) {
+    const normalized = normalizeSession(session);
+    const sessions = [normalized, ...this.state.sessions.filter((item) => item.id !== normalized.id)];
+    this.state.sessions = sessions;
+    this.state.activeSessionId = normalized.id;
+    this.saveSessions(sessions);
+    return normalized;
+  }
+
+  sessionPayloadFromDraft() {
+    const draft = this.state.draft;
+    const question = questionById(draft.questionId);
+    const spec = QUESTION_SPEC[question.id] || QUESTION_SPEC.twitter;
     return {
-      comps: SEED.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
-      edges: SEED.edges.map((edge) => ({ ...edge })),
+      questionId: question.id,
+      title: draft.questionMode === 'custom' && draft.customPrompt ? `Custom ${question.title}` : question.title,
+      prompt: draft.questionMode === 'custom' && draft.customPrompt ? draft.customPrompt : spec.statement,
+      candidateName: draft.candidateName || 'Candidate',
+      candidateEmail: draft.candidateEmail,
+      difficulty: draft.difficulty || question.diff,
+      duration: Number(draft.duration || question.dur),
+      permissions: draft.permissions,
+      architecture: { comps: this.state.comps, edges: this.state.edges },
+      scores: this.state.scores,
     };
   }
 
-  openWorkspace(question = this.state.question) {
+  async persistSessionFromSetup() {
+    if (!this.state.currentUser) {
+      this.setState({ screen: 'login' });
+      return null;
+    }
+    const created = await this.api.createInterview(this.sessionPayloadFromDraft());
+    const session = this.upsertSession(created.interview);
+    const share = await this.api.shareInterview(session.id);
+    this.setState({
+      shareLinks: share.links,
+      candidateLink: share.links.candidate,
+      interviewerLink: share.links.interviewer,
+    });
+    return session;
+  }
+
+  createSessionFromSetup() {
+    const session = createSessionFromDraft({
+      user: this.state.currentUser,
+      draft: this.state.draft,
+      questionId: this.state.draft.questionId,
+    });
+    return this.upsertSession(session);
+  }
+
+  shareLinksFor(session) {
+    return {
+      candidate: buildShareUrl({ baseUrl: this.baseUrl(), role: 'candidate', session }),
+      interviewer: buildShareUrl({ baseUrl: this.baseUrl(), role: 'interviewer', session }),
+      panel: buildShareUrl({ baseUrl: this.baseUrl(), role: 'panel', session }),
+    };
+  }
+
+  seedFor(question) {
+    const rename = {
+      whatsapp: ['Mobile App', 'API Gateway', 'Message Service', 'Presence Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
+      uber: ['Mobile App', 'API Gateway', 'Dispatch Service', 'Trip Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
+      netflix: ['Web Client', 'CDN', 'Playback API', 'Encoding Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
+      tinyurl: ['Browser', 'API Gateway', 'Redirect Service', 'Link Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
+      gdocs: ['Web Client', 'API Gateway', 'Collab Service', 'Document Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
+      youtube: ['Web Client', 'CDN', 'Upload Service', 'Transcode Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
+      dropbox: ['Desktop Client', 'API Gateway', 'Sync Service', 'Metadata Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
+      instagram: ['Mobile App', 'CDN', 'Feed Service', 'Media Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
+      search: ['Browser', 'API Gateway', 'Query Service', 'Crawler Service', 'Redis', 'Elasticsearch', 'Kafka', 'S3'],
+      notif: ['Service', 'API Gateway', 'Template Service', 'Delivery Worker', 'Redis', 'DynamoDB', 'Kafka', 'SQS'],
+      payment: ['Web Client', 'API Gateway', 'Payment Service', 'Ledger Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
+      delivery: ['Mobile App', 'API Gateway', 'Order Service', 'Dispatch Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
+      matching: ['Mobile App', 'API Gateway', 'Matching Service', 'Geo Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
+    };
+    const names = rename[question];
+    if (!names) {
+      return {
+        comps: SEED.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+        edges: SEED.edges.map((edge) => ({ ...edge })),
+      };
+    }
+    const comps = SEED.comps.slice(0, 8).map((component, index) => ({
+      ...component,
+      type: names[index] || component.type,
+      base: /Service|Worker|API$/.test(names[index] || '') ? 'Service' : component.base,
+      cat: index < 2 ? component.cat : index < 4 ? 'Compute' : index < 6 ? 'Storage' : index === 6 ? 'Messaging' : 'Storage',
+      props: { ...(component.props || {}) },
+    }));
+    return {
+      comps,
+      edges: SEED.edges.filter((edge) => comps.some((component) => component.id === edge.from) && comps.some((component) => component.id === edge.to)).map((edge) => ({ ...edge })),
+    };
+  }
+
+  openWorkspace(question = this.state.question, options = {}) {
     const seed = this.seedFor(question);
     this.setState({
       screen: 'workspace',
       question,
+      role: options.role || this.state.role || 'interviewer',
+      rolePreview: options.rolePreview || null,
+      activeSessionId: options.sessionId || this.state.activeSessionId,
       comps: seed.comps,
       edges: seed.edges,
       selectedId: null,
@@ -98,8 +562,76 @@ export class SystemDesignStudio {
     });
   }
 
+  openWorkspaceForSession(session, role = this.state.role) {
+    const normalized = this.upsertSession(session);
+    this.openWorkspace(normalized.questionId, { role, sessionId: normalized.id });
+  }
+
+  activeRole() {
+    return this.state.rolePreview || this.state.role || 'interviewer';
+  }
+
+  permissions() {
+    return { ...DEFAULT_PERMISSIONS, ...(this.activeSession()?.permissions || this.state.draft.permissions || {}) };
+  }
+
+  visibility() {
+    if (this.state.visibility) return this.state.visibility;
+    const permissions = this.permissions();
+    const role = this.activeRole();
+    if (role === 'candidate') {
+      return {
+        canSeeQuestion: Boolean(permissions.candidateCanViewQuestion),
+        canSeeArchitecture: true,
+        canEditCanvas: Boolean(permissions.allowCandidateEdit),
+        canSeeHealth: Boolean(permissions.showHealthToCandidate),
+        canInjectFailures: false,
+        canSeeAiHints: !permissions.aiHintsInterviewerOnly,
+        canSeeScorecard: false,
+      };
+    }
+    if (role === 'panel') {
+      return {
+        canSeeQuestion: true,
+        canSeeArchitecture: true,
+        canEditCanvas: false,
+        canSeeHealth: true,
+        canInjectFailures: false,
+        canSeeAiHints: false,
+        canSeeScorecard: Boolean(permissions.panelCanViewReview),
+      };
+    }
+    return {
+      canSeeQuestion: true,
+      canSeeArchitecture: true,
+      canEditCanvas: true,
+      canSeeHealth: true,
+      canInjectFailures: Boolean(permissions.allowFailureInjection),
+      canSeeAiHints: true,
+      canSeeScorecard: true,
+    };
+  }
+
+  canEdit() {
+    return Boolean(this.visibility().canEditCanvas);
+  }
+
+  canInjectFailures() {
+    return Boolean(this.visibility().canInjectFailures);
+  }
+
+  canViewHealth() {
+    return Boolean(this.visibility().canSeeHealth);
+  }
+
+  canViewAiHints() {
+    return Boolean(this.visibility().canSeeAiHints);
+  }
+
   render() {
-    const html = this.state.screen === 'dashboard' ? this.renderDashboard()
+    const html = this.state.screen === 'login' ? this.renderLogin()
+      : this.state.screen === 'join' ? this.renderJoin()
+      : this.state.screen === 'dashboard' ? this.renderDashboard()
       : this.state.screen === 'setup' ? this.renderSetup()
       : this.state.screen === 'link' ? this.renderLinkGenerated()
       : this.state.screen === 'review' ? this.renderReview()
@@ -107,11 +639,81 @@ export class SystemDesignStudio {
     this.root.innerHTML = html + (this.state.toast ? `<div class="toast">${esc(this.state.toast)}</div>` : '');
   }
 
+  renderLogin() {
+    const invite = this.state.pendingInvite;
+    return `
+      <div class="app dashboard auth-screen">
+        <div class="auth-shell">
+          <section class="auth-panel card">
+            <div class="brand auth-brand">
+              <span class="logo">S</span><span class="brand-title">SystemDesign Studio</span><span class="beta">PUBLIC</span>
+            </div>
+            <div class="page-title">${invite ? 'Sign in to join interview' : 'Sign in to your workspace'}</div>
+            <p class="subtle">${invite ? `${esc(invite.session.owner.name)} shared ${esc(invite.session.title)} with you.` : 'Use a lightweight workspace account for local drafts, interviews, and share links.'}</p>
+            <div class="pill-row" style="margin-top:18px">
+              <button class="pill pill-button ${this.state.authMode === 'signup' ? 'active' : ''}" data-action="authMode" data-mode="signup">Create account</button>
+              <button class="pill pill-button ${this.state.authMode === 'login' ? 'active' : ''}" data-action="authMode" data-mode="login">Sign in</button>
+            </div>
+            ${this.state.authMode === 'signup' ? `<label style="display:block;margin-top:18px">
+              <span class="mono-label">Name</span>
+              <input class="field" data-login-field="name" autocomplete="name" value="${esc(this.state.login.name)}" placeholder="Neha Rao">
+            </label>` : ''}
+            <label style="display:block;margin-top:12px">
+              <span class="mono-label">Work email</span>
+              <input class="field" data-login-field="email" autocomplete="email" value="${esc(this.state.login.email)}" placeholder="neha@example.com">
+            </label>
+            <label style="display:block;margin-top:12px">
+              <span class="mono-label">Password</span>
+              <input class="field" data-login-field="password" type="password" autocomplete="${this.state.authMode === 'signup' ? 'new-password' : 'current-password'}" value="${esc(this.state.login.password)}" placeholder="At least 12 characters">
+            </label>
+            <button class="btn primary" style="width:100%;margin-top:16px" data-action="signIn">${invite ? 'Continue to invite' : this.state.authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
+            <div class="subtle" style="font-size:12px;margin-top:10px">Accounts and interviews are stored by the configured SystemDesign Studio API.</div>
+            ${invite ? `<div class="visibility-card" style="margin-top:16px">
+              <div class="mono-label">Invite visibility</div>
+              <div class="visibility-row"><span>Role</span><strong>${esc(ROLE_LABELS[invite.role] || invite.role)}</strong></div>
+              <div class="visibility-row"><span>Question</span><strong>${esc(invite.session.title)}</strong></div>
+              <div class="visibility-row"><span>Candidate screen</span><strong>${invite.session.permissions.showHealthToCandidate ? 'Health visible' : 'Health hidden'}</strong></div>
+            </div>` : ''}
+          </section>
+        </div>
+      </div>`;
+  }
+
+  renderJoin() {
+    const invite = this.state.pendingInvite;
+    const session = invite?.session || this.activeSession();
+    if (!session) return this.renderDashboard();
+    return `
+      <div class="app dashboard">
+        ${this.renderTopbar('join')}
+        <div style="min-height:calc(100vh - 54px);display:grid;place-items:center;padding:34px">
+          <div class="card stat" style="width:min(760px,100%);padding:28px">
+            <div class="pill" style="width:max-content;color:var(--accent-soft);margin-bottom:14px">${esc(ROLE_LABELS[this.state.role] || this.state.role)} invite</div>
+            <div class="page-title">${esc(session.title)}</div>
+            <p class="subtle">You are joining as ${esc(ROLE_LABELS[this.state.role] || this.state.role)}. Screen visibility is applied before the workspace opens.</p>
+            <div class="grid" style="grid-template-columns:repeat(3,1fr);margin:18px 0">
+              <div class="card stat"><div class="subtle">Interviewer</div><strong>${esc(session.owner.name)}</strong></div>
+              <div class="card stat"><div class="subtle">Candidate</div><strong>${esc(session.candidate.name)}</strong></div>
+              <div class="card stat"><div class="subtle">Duration</div><strong>${esc(session.duration)}m</strong></div>
+            </div>
+            ${this.renderVisibilityMatrix(session)}
+            <div style="display:flex;gap:10px;margin-top:20px">
+              <button class="btn" style="flex:1" data-action="dashboard">Dashboard</button>
+              <button class="btn primary" style="flex:1" data-action="acceptInvite">Join workspace</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
   renderDashboard() {
+    const user = this.state.currentUser || { name: 'Guest', email: '' };
+    const sessions = this.state.sessions;
+    const activeSessions = sessions.filter((session) => session.status !== 'reviewed');
     const stats = [
-      ['Interviews this week', '12'],
-      ['Avg. duration', '46m'],
-      ['Pass rate', '58%'],
+      ['Interviews this week', String(sessions.length)],
+      ['Avg. duration', sessions.length ? `${Math.round(sessions.reduce((sum, session) => sum + session.duration, 0) / sessions.length)}m` : '0m'],
+      ['Active sessions', String(activeSessions.length)],
       ['Question presets', String(QUESTIONS.length)],
     ];
     return `
@@ -120,8 +722,8 @@ export class SystemDesignStudio {
         <div class="dashboard-body">
           <div class="page-head">
             <div>
-              <div class="page-title">Good afternoon, Aarav</div>
-              <div class="subtle">You have 2 interviews scheduled today.</div>
+              <div class="page-title">Good afternoon, ${esc(firstName(user.name || user.email))}</div>
+              <div class="subtle">${sessions.length ? `${sessions.length} interview workspace${sessions.length === 1 ? '' : 's'} saved to this account.` : 'Create your first interview workspace.'}</div>
             </div>
             <button class="btn primary" data-action="setup">Create interview</button>
           </div>
@@ -129,20 +731,18 @@ export class SystemDesignStudio {
             ${stats.map(([label, value]) => `<div class="card stat"><div class="subtle">${label}</div><div class="stat-value">${value}</div></div>`).join('')}
           </div>
           <div class="section-head"><div class="section-title">Resume in progress</div></div>
-          <button class="card resume-card" data-action="workspace" data-question="twitter">
-            <span class="icon-tile" style="color:var(--accent-soft);background:rgba(99,102,241,.18)">${this.icon('monitor', 21)}</span>
-            <span style="text-align:left;flex:1">
-              <strong>Design Twitter - Senior Backend loop</strong><br>
-              <span class="subtle">Candidate: Priya S. - 10 components placed - paused 12 min ago</span>
-            </span>
-            <span style="color:var(--accent-soft);font-weight:700">Resume</span>
-          </button>
+          ${activeSessions.length ? activeSessions.slice(0, 2).map((session) => this.renderSessionCard(session)).join('') : `
+            <div class="card empty-state">
+              <strong>No active interview yet</strong>
+              <span class="subtle">Choose a preset or create a custom prompt to generate role-specific share links.</span>
+              <button class="btn primary" data-action="setup">Create interview</button>
+            </div>`}
           <div class="section-head">
             <div class="section-title">Upcoming interviews</div>
-            <span class="mono-label">Today</span>
+            <span class="mono-label">${esc(user.email || 'Local account')}</span>
           </div>
           <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-bottom:26px">
-            ${['Payment System - 4:00 PM', 'Food Delivery - 6:30 PM'].map((item) => `<div class="card stat"><strong>${item}</strong><div class="subtle" style="margin-top:4px">Diagnostics enabled - interviewer hints only</div></div>`).join('')}
+            ${sessions.length ? sessions.slice(0, 3).map((session) => `<div class="card stat"><strong>${esc(session.title)} - ${esc(session.duration)}m</strong><div class="subtle" style="margin-top:4px">Candidate: ${esc(session.candidate.name)} - ${session.permissions.aiHintsInterviewerOnly ? 'AI hints interviewer only' : 'AI hints visible'}</div></div>`).join('') : '<div class="card stat"><strong>No scheduled interviews</strong><div class="subtle" style="margin-top:4px">New sessions appear here after you generate links.</div></div>'}
           </div>
           <div class="section-head">
             <div class="section-title">Question library</div>
@@ -153,10 +753,22 @@ export class SystemDesignStudio {
           </div>
           <div class="section-head"><div class="section-title">Recent architectures</div></div>
           <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(250px,1fr))">
-            ${['Twitter feed - reviewed', 'Payment ledger - shared', 'Ride matching - draft'].map((item) => `<div class="card stat"><strong>${item}</strong><div class="subtle" style="margin-top:4px">Architecture health, diagnostics, and scorecard preserved.</div></div>`).join('')}
+            ${sessions.length ? sessions.slice(0, 3).map((session) => `<div class="card stat"><strong>${esc(session.title)} - ${esc(session.status)}</strong><div class="subtle" style="margin-top:4px">Candidate: ${esc(session.candidate.name)} - ${esc(new Date(session.updatedAt).toLocaleDateString())}</div></div>`).join('') : '<div class="card stat"><strong>No recent architectures</strong><div class="subtle" style="margin-top:4px">Finished reviews and drafts will be preserved per signed-in user.</div></div>'}
           </div>
         </div>
       </div>`;
+  }
+
+  renderSessionCard(session) {
+    return `
+      <button class="card resume-card" data-action="resumeSession" data-session-id="${esc(session.id)}">
+        <span class="icon-tile" style="color:var(--accent-soft);background:rgba(99,102,241,.18)">${this.icon('monitor', 21)}</span>
+        <span style="text-align:left;flex:1">
+          <strong>${esc(session.title)} - ${esc(session.difficulty)} loop</strong><br>
+          <span class="subtle">Candidate: ${esc(session.candidate.name)} - ${esc(session.duration)}m - ${esc(session.status)}</span>
+        </span>
+        <span style="color:var(--accent-soft);font-weight:700">Resume</span>
+      </button>`;
   }
 
   renderQuestionCard(question) {
@@ -177,7 +789,9 @@ export class SystemDesignStudio {
   }
 
   renderSetup() {
-    const current = QUESTIONS.find((question) => question.id === this.state.question) || QUESTIONS[0];
+    const draft = this.state.draft;
+    const current = questionById(draft.questionId);
+    const spec = QUESTION_SPEC[current.id] || QUESTION_SPEC.twitter;
     return `
       <div class="app dashboard">
         ${this.renderTopbar('setup')}
@@ -185,10 +799,10 @@ export class SystemDesignStudio {
           <div class="page-head">
             <div>
               <div class="page-title">Create interview</div>
-              <div class="subtle">Configure the workspace, permissions, diagnostics, and candidate link.</div>
+              <div class="subtle">Configure the workspace, permissions, diagnostics, and role-specific share links.</div>
             </div>
             <div style="display:flex;gap:10px">
-              <button class="btn" data-action="workspace" data-question="${esc(this.state.question)}">Start workspace</button>
+              <button class="btn" data-action="workspace" data-question="${esc(draft.questionId)}">Start workspace</button>
               <button class="btn primary" data-action="generateLink">Generate candidate link</button>
             </div>
           </div>
@@ -198,57 +812,73 @@ export class SystemDesignStudio {
                 <div class="card stat">
                   <div class="mono-label">Question source</div>
                   <div class="pill-row" style="margin:12px 0 14px">
-                    <span class="pill" style="color:var(--accent-soft);border-color:rgba(99,102,241,.45);background:rgba(99,102,241,.16)">Preset</span>
-                    <span class="pill">Custom</span>
+                    <button class="pill pill-button ${draft.questionMode === 'preset' ? 'active' : ''}" data-action="questionMode" data-mode="preset">Preset</button>
+                    <button class="pill pill-button ${draft.questionMode === 'custom' ? 'active' : ''}" data-action="questionMode" data-mode="custom">Custom</button>
                   </div>
                   <div class="grid">
                     ${QUESTIONS.slice(0, 6).map((question) => `
-                      <button class="card stat" data-action="selectSetupQuestion" data-question="${esc(question.id)}" style="text-align:left;border-color:${question.id === this.state.question ? 'rgba(99,102,241,.45)' : 'var(--border)'}">
+                      <button class="card stat" data-action="selectSetupQuestion" data-question="${esc(question.id)}" style="text-align:left;border-color:${question.id === draft.questionId ? 'rgba(99,102,241,.45)' : 'var(--border)'}">
                         <strong>${esc(question.title)}</strong>
                         <div class="subtle" style="font-size:12px;margin-top:4px">${esc(question.topics.join(', '))} - ${esc(question.dur)}m</div>
                       </button>`).join('')}
                   </div>
                 </div>
                 <div class="card stat">
-                  <div class="mono-label">Custom prompt</div>
-                  <textarea class="textarea" aria-label="Custom system design prompt"></textarea>
+                  <div class="mono-label">Interview prompt</div>
+                  <textarea class="textarea" data-session-field="customPrompt" aria-label="Custom system design prompt" placeholder="${esc(spec.statement)}">${esc(draft.customPrompt)}</textarea>
                   <div class="form-grid" style="margin-top:12px">
-                    <label><span class="mono-label">Difficulty</span><select class="select"><option>${esc(current.diff)}</option><option>Medium</option><option>Easy</option></select></label>
-                    <label><span class="mono-label">Duration</span><select class="select"><option>${esc(current.dur)} min</option><option>30 min</option><option>60 min</option></select></label>
+                    <label><span class="mono-label">Difficulty</span><select class="select" data-session-field="difficulty">${['Easy', 'Medium', 'Hard'].map((item) => `<option ${item === draft.difficulty ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
+                    <label><span class="mono-label">Duration</span><select class="select" data-session-field="duration">${[30, 40, 45, 50, 60].map((item) => `<option value="${item}" ${Number(item) === Number(draft.duration) ? 'selected' : ''}>${item} min</option>`).join('')}</select></label>
                   </div>
+                  <div class="mono-label" style="margin-top:14px">Question details</div>
+                  ${(spec.functional || []).slice(0, 3).map((item) => `<div style="font-size:12px;margin-top:7px;color:var(--text-2)">+ ${esc(item)}</div>`).join('')}
+                </div>
+              </div>
+              <div class="form-grid" style="margin-top:14px">
+                <div class="card stat">
+                  <div class="mono-label">Candidate</div>
+                  <label style="display:block;margin-top:10px"><span class="mono-label">Candidate name</span><input class="field" data-session-field="candidateName" value="${esc(draft.candidateName)}" placeholder="Sam Lee"></label>
+                  <label style="display:block;margin-top:10px"><span class="mono-label">Candidate email</span><input class="field" data-session-field="candidateEmail" value="${esc(draft.candidateEmail)}" placeholder="sam@example.com"></label>
+                </div>
+                <div class="card stat">
+                  <div class="mono-label">Interviewer</div>
+                  <div class="visibility-row"><span>Name</span><strong>${esc(this.state.currentUser?.name || 'Signed-in user')}</strong></div>
+                  <div class="visibility-row"><span>Email</span><strong>${esc(this.state.currentUser?.email || 'local')}</strong></div>
+                  <div class="visibility-row"><span>Question</span><strong>${esc(current.title)}</strong></div>
                 </div>
               </div>
               <div class="form-grid" style="margin-top:14px">
                 ${this.renderChecklist('Interviewer controls', [
-                  'Allow candidate editing',
-                  'Enable diagnostics during interview',
-                  'Hide health score from candidate',
-                  'Enable failure injection',
-                  'AI hints for interviewer only',
+                  ['allowCandidateEdit', 'Allow candidate editing'],
+                  ['diagnosticsDuringInterview', 'Enable diagnostics during interview'],
+                  ['showHealthToCandidate', 'Show health score to candidate'],
+                  ['allowFailureInjection', 'Enable failure injection'],
+                  ['aiHintsInterviewerOnly', 'AI hints for interviewer only'],
                 ])}
                 ${this.renderChecklist('Permissions', [
-                  'Candidate can view question',
-                  'Candidate can edit canvas',
-                  'Candidate cannot view scorecard',
-                  'Interviewer can inject scenarios',
-                  'Panel can view submitted review',
+                  ['candidateCanViewQuestion', 'Candidate can view question'],
+                  ['allowCandidateEdit', 'Candidate can edit canvas'],
+                  ['showHealthToCandidate', 'Candidate can view health panel'],
+                  ['allowFailureInjection', 'Interviewer can inject scenarios'],
+                  ['panelCanViewReview', 'Panel can view submitted review'],
                 ])}
               </div>
             </div>
             <aside class="card stat" style="position:sticky;top:20px;align-self:start">
               <div class="mono-label">Session summary</div>
               <h2 style="margin:12px 0 4px">${esc(current.title)}</h2>
-              <div class="subtle">Senior Backend loop - ${esc(current.dur)} minutes</div>
+              <div class="subtle">${esc(draft.difficulty)} loop - ${esc(draft.duration)} minutes</div>
               <div class="grid" style="margin:18px 0">
                 ${[
-                  ['Candidate', 'Priya S.'],
-                  ['Diagnostics', 'Enabled'],
-                  ['AI hints', 'Interviewer only'],
-                  ['Failure injection', 'Allowed'],
+                  ['Candidate', draft.candidateName || 'Not set'],
+                  ['Diagnostics', draft.permissions.diagnosticsDuringInterview ? 'Enabled' : 'Hidden'],
+                  ['AI hints', draft.permissions.aiHintsInterviewerOnly ? 'Interviewer only' : 'Visible'],
+                  ['Candidate health', draft.permissions.showHealthToCandidate ? 'Visible' : 'Hidden'],
                 ].map(([a, b]) => `<div style="display:flex;justify-content:space-between;font-size:13px"><span class="subtle">${a}</span><strong>${b}</strong></div>`).join('')}
               </div>
+              ${this.renderVisibilityMatrix({ permissions: draft.permissions })}
               <button class="btn primary" style="width:100%;margin-bottom:10px" data-action="generateLink">Generate candidate link</button>
-              <button class="btn" style="width:100%" data-action="workspace" data-question="${esc(this.state.question)}">Start workspace</button>
+              <button class="btn" style="width:100%" data-action="workspace" data-question="${esc(draft.questionId)}">Start workspace</button>
             </aside>
           </div>
         </div>
@@ -256,34 +886,53 @@ export class SystemDesignStudio {
   }
 
   renderChecklist(title, items) {
-    return `<div class="card stat"><div class="mono-label">${esc(title)}</div>${items.map((item) => `<label class="check-row"><span>${esc(item)}</span><input type="checkbox" checked></label>`).join('')}</div>`;
+    const permissions = this.state.draft?.permissions || DEFAULT_PERMISSIONS;
+    return `<div class="card stat"><div class="mono-label">${esc(title)}</div>${items.map((item) => {
+      const [key, label] = Array.isArray(item) ? item : [item, item];
+      return `<label class="check-row"><span>${esc(label)}</span><input data-permission="${esc(key)}" type="checkbox" ${permissions[key] ? 'checked' : ''}></label>`;
+    }).join('')}</div>`;
+  }
+
+  renderVisibilityMatrix(source) {
+    const permissions = { ...DEFAULT_PERMISSIONS, ...(source?.permissions || {}) };
+    const rows = [
+      ['Candidate screen', permissions.allowCandidateEdit ? 'Can edit canvas' : 'View only'],
+      ['Interviewer screen', permissions.allowFailureInjection ? 'Diagnostics + failure injection' : 'Diagnostics only'],
+      ['Panel screen', permissions.panelCanViewReview ? 'Review summary visible' : 'No review access'],
+      ['Health score', permissions.showHealthToCandidate ? 'Visible to candidate' : 'Hidden from candidate'],
+    ];
+    return `<div class="visibility-card">${rows.map(([a, b]) => `<div class="visibility-row"><span>${esc(a)}</span><strong>${esc(b)}</strong></div>`).join('')}</div>`;
   }
 
   renderLinkGenerated() {
-    const question = QUESTIONS.find((item) => item.id === this.state.question) || QUESTIONS[0];
+    const session = this.activeSession();
+    const question = questionById(session?.questionId || this.state.question);
+    const links = this.state.shareLinks;
     return `
       <div class="app dashboard">
         ${this.renderTopbar('link')}
         <div style="min-height:calc(100vh - 54px);display:grid;place-items:center;padding:34px">
-          <div class="card stat" style="width:min(720px,100%);padding:28px">
+          <div class="card stat" style="width:min(820px,100%);padding:28px">
             <div class="icon-tile" style="width:48px;height:48px;color:#6ee7b7;background:rgba(52,211,153,.14);margin-bottom:18px">${this.icon('shield', 24)}</div>
-            <div class="page-title">Candidate link generated</div>
-            <p class="subtle">Share this session with the candidate, then open the workspace when they join.</p>
-            <div class="mono-label">Candidate link</div>
-            <div style="display:flex;gap:10px;margin:8px 0 18px">
-              <input class="field" readonly value="${esc(this.state.candidateLink)}">
-              <button class="btn" data-action="copyLink">Copy link</button>
-            </div>
+            <div class="page-title">Share links generated</div>
+            <p class="subtle">These links are backed by server-side invite tokens. Each role receives a different workspace view.</p>
+            ${['candidate', 'interviewer', 'panel'].map((role) => `
+              <div class="mono-label" style="margin-top:12px">${esc(ROLE_LABELS[role])} link</div>
+              <div style="display:flex;gap:10px;margin:8px 0 10px">
+                <input class="field" data-role-link="${esc(role)}" readonly value="${esc(links[role] || '')}">
+                <button class="btn" data-action="copyShareLink" data-role="${esc(role)}">Copy</button>
+              </div>`).join('')}
             <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
               ${[
-                ['Candidate', 'Priya S.'],
+                ['Candidate', session?.candidate?.name || 'Candidate'],
                 ['Question', question.title],
-                ['Status', 'Candidate joined'],
+                ['Status', session?.status || 'in-progress'],
               ].map(([a, b]) => `<div class="card stat"><div class="subtle">${esc(a)}</div><strong>${esc(b)}</strong></div>`).join('')}
             </div>
+            ${this.renderVisibilityMatrix(session)}
             <div style="display:flex;gap:10px">
               <button class="btn" style="flex:1" data-action="setup">Edit setup</button>
-              <button class="btn primary" style="flex:1" data-action="workspace" data-question="${esc(this.state.question)}">Start workspace</button>
+              <button class="btn primary" style="flex:1" data-action="workspace" data-question="${esc(session?.questionId || this.state.question)}">Start workspace</button>
             </div>
           </div>
         </div>
@@ -305,6 +954,7 @@ export class SystemDesignStudio {
 
   renderTopbar(mode) {
     const isWorkspace = mode === 'workspace';
+    const role = this.activeRole();
     return `
       <header class="topbar">
         <div class="brand" data-action="dashboard" role="button" tabindex="0">
@@ -312,29 +962,45 @@ export class SystemDesignStudio {
         </div>
         <div class="divider"></div>
         ${isWorkspace ? `
-          <button class="btn icon-btn active" title="Select">${this.icon('search', 16)}</button>
-          <button class="btn icon-btn" title="Pan">${this.icon('net', 16)}</button>
-          <button class="btn icon-btn" title="Connect">${this.icon('stream', 16)}</button>
-          <button class="btn icon-btn" title="Comment">${this.icon('bell', 16)}</button>
+          <button class="btn icon-btn ${this.state.tool === 'select' ? 'active' : ''}" data-action="tool" data-tool="select" title="Select">${this.icon('search', 16)}</button>
+          <button class="btn icon-btn ${this.state.tool === 'pan' ? 'active' : ''}" data-action="tool" data-tool="pan" title="Pan">${this.icon('net', 16)}</button>
+          <button class="btn icon-btn ${this.state.tool === 'connect' ? 'active' : ''}" data-action="tool" data-tool="connect" title="Connect">${this.icon('stream', 16)}</button>
+          <button class="btn icon-btn ${this.state.tool === 'comment' ? 'active' : ''}" data-action="tool" data-tool="comment" title="Comment">${this.icon('bell', 16)}</button>
+          <span class="pill role-pill">${esc(ROLE_LABELS[role] || role)}</span>
           <div class="spacer"></div>
           <span class="mono-label toolbar-label">Simulate</span>
-          <button class="btn danger" data-action="breakSelected">Break</button>
+          <button class="btn danger" data-action="breakSelected" ${this.canInjectFailures() ? '' : 'disabled'}>Break</button>
           <button class="btn ${this.state.traffic ? 'active' : ''}" data-action="traffic" data-value="1000">Traffic ${this.state.traffic ? 'x' + this.state.traffic : ''}</button>
-          <button class="btn" data-action="injectScenario" data-scenario="redis">Redis down</button>
-          <button class="btn optional-wide" data-action="injectScenario" data-scenario="kafka">Kafka down</button>
-          <button class="btn optional-wide" data-action="injectScenario" data-scenario="db">DB outage</button>
-          <button class="btn" data-action="resetSimulation">Reset</button>
+          <button class="btn" data-action="injectScenario" data-scenario="redis" ${this.canInjectFailures() ? '' : 'disabled'}>Redis down</button>
+          <button class="btn optional-wide" data-action="injectScenario" data-scenario="kafka" ${this.canInjectFailures() ? '' : 'disabled'}>Kafka down</button>
+          <button class="btn optional-wide" data-action="injectScenario" data-scenario="db" ${this.canInjectFailures() ? '' : 'disabled'}>DB outage</button>
+          <button class="btn" data-action="resetSimulation" ${this.canInjectFailures() ? '' : 'disabled'}>Reset</button>
           <div class="spacer"></div>
-          <button class="btn" data-action="toggleAi">AI hints</button>
+          <button class="btn" data-action="previewRole" data-role="candidate">Candidate screen</button>
+          <button class="btn" data-action="previewRole" data-role="interviewer">Interviewer screen</button>
+          <button class="btn" data-action="toggleAi" ${this.canViewAiHints() ? '' : 'disabled'}>AI hints</button>
           <button class="btn primary" data-action="review">Finish & review</button>`
         : `
           <div class="spacer"></div>
           <button class="btn" data-action="dashboard">Dashboard</button>
+          ${this.state.currentUser ? `<button class="btn" data-action="signOut">Sign out</button>` : ''}
           ${mode !== 'setup' ? '<button class="btn primary" data-action="setup">Create interview</button>' : ''}`}
       </header>`;
   }
 
   renderPalette() {
+    if (!this.canEdit()) {
+      return `
+        <aside class="left-panel">
+          <div class="panel-head">
+            <div class="section-title">Workspace access</div>
+            <div class="subtle" style="font-size:12px">This role is view-only for canvas edits.</div>
+          </div>
+          <div class="panel-scroll">
+            ${this.renderVisibilityMatrix(this.activeSession() || { permissions: this.permissions() })}
+          </div>
+        </aside>`;
+    }
     return `
       <aside class="left-panel">
         <div class="panel-head">
@@ -367,9 +1033,11 @@ export class SystemDesignStudio {
             <strong>${esc((QUESTIONS.find((q) => q.id === this.state.question) || QUESTIONS[0]).title)}</strong>
             <span class="pill" style="color:var(--bad-2)">Hard</span>
           </div>
-          <p class="subtle" style="font-size:12.5px;line-height:1.45">${esc(spec.statement || 'Design the system and explain tradeoffs.')}</p>
-          <div class="mono-label">Requirements</div>
-          ${(spec.functional || []).slice(0, 4).map((item) => `<div style="font-size:12px;margin-top:6px;color:var(--text-2)">+ ${esc(item)}</div>`).join('')}
+          ${this.visibility().canSeeQuestion ? `
+            <p class="subtle" style="font-size:12.5px;line-height:1.45">${esc(this.activeSession()?.prompt || spec.statement || 'Design the system and explain tradeoffs.')}</p>
+            <div class="mono-label">Requirements</div>
+            ${(spec.functional || []).slice(0, 4).map((item) => `<div style="font-size:12px;margin-top:6px;color:var(--text-2)">+ ${esc(item)}</div>`).join('')}`
+          : '<p class="subtle" style="font-size:12.5px;line-height:1.45">Question details are hidden for this role.</p>'}
         </div>
         <div class="canvas-layer">
           <svg class="edges">${this.state.edges.map((edge) => this.renderEdgePath(edge, byId)).join('')}</svg>
@@ -432,7 +1100,26 @@ export class SystemDesignStudio {
     const edge = this.selectedEdge();
     if (selected) return this.renderInspector(selected);
     if (edge) return this.renderEdgeInspector(edge);
+    if (!this.canViewHealth()) return this.renderRestrictedPanel('Architecture health', 'Health score, diagnostics totals, and readiness dimensions are hidden from this role.');
     return this.renderHealthPanel();
+  }
+
+  renderRestrictedPanel(title, body) {
+    return `
+      <aside class="right-panel">
+        <div class="panel-head">
+          <div class="section-title">${esc(title)}</div>
+          <div class="subtle" style="font-size:12px">Role: ${esc(ROLE_LABELS[this.activeRole()] || this.activeRole())}</div>
+        </div>
+        <div class="panel-scroll">
+          <div class="card stat">
+            <div class="icon-tile" style="color:var(--warn);background:rgba(245,158,11,.14);margin-bottom:12px">${this.icon('shield', 20)}</div>
+            <strong>Visibility restricted</strong>
+            <div class="subtle" style="font-size:12.5px;margin-top:6px">${esc(body)}</div>
+          </div>
+          ${this.renderVisibilityMatrix(this.activeSession() || { permissions: this.permissions() })}
+        </div>
+      </aside>`;
   }
 
   renderHealthPanel() {
@@ -481,8 +1168,8 @@ export class SystemDesignStudio {
             </div>
           </div>
           <div style="display:flex;gap:8px;margin-top:12px">
-            <button class="btn danger" data-action="breakSelected">${this.state.broken.includes(component.id) ? 'Restore component' : 'Break component'}</button>
-            <button class="btn" data-action="deleteSelected">Delete</button>
+            <button class="btn danger" data-action="breakSelected" ${this.canInjectFailures() ? '' : 'disabled'}>${this.state.broken.includes(component.id) ? 'Restore component' : 'Break component'}</button>
+            <button class="btn" data-action="deleteSelected" ${this.canEdit() ? '' : 'disabled'}>Delete</button>
           </div>
         </div>
         <div class="tabs">${tabs.map((item) => `<button class="tab ${item.id === active ? 'active' : ''}" data-action="tab" data-tab="${esc(item.id)}">${esc(item.label)}</button>`).join('')}</div>
@@ -499,13 +1186,14 @@ export class SystemDesignStudio {
   renderField(field, component, config) {
     const value = field.k === 'name' ? component.type : config[field.k];
     const unit = field.unit ? `<span class="subtle">${esc(field.unit)}</span>` : '';
+    const disabled = this.canEdit() ? '' : 'disabled';
     if (field.t === 'bool') {
-      return `<label class="check-row"><span>${esc(field.l)}</span><input data-field="${esc(field.k)}" type="checkbox" ${value ? 'checked' : ''}></label>`;
+      return `<label class="check-row"><span>${esc(field.l)}</span><input data-field="${esc(field.k)}" type="checkbox" ${value ? 'checked' : ''} ${disabled}></label>`;
     }
     if (field.t === 'sel') {
-      return `<label style="display:block;margin-top:10px"><span class="mono-label">${esc(field.l)}</span><select class="select" data-field="${esc(field.k)}">${field.opts.map((option) => `<option ${String(option) === String(value) ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select></label>`;
+      return `<label style="display:block;margin-top:10px"><span class="mono-label">${esc(field.l)}</span><select class="select" data-field="${esc(field.k)}" ${disabled}>${field.opts.map((option) => `<option ${String(option) === String(value) ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select></label>`;
     }
-    return `<label style="display:block;margin-top:10px"><span style="display:flex;justify-content:space-between"><span class="mono-label">${esc(field.l)}</span>${unit}</span><input class="field" data-field="${esc(field.k)}" type="${field.t === 'num' ? 'number' : 'text'}" value="${esc(value)}"></label>`;
+    return `<label style="display:block;margin-top:10px"><span style="display:flex;justify-content:space-between"><span class="mono-label">${esc(field.l)}</span>${unit}</span><input class="field" data-field="${esc(field.k)}" type="${field.t === 'num' ? 'number' : 'text'}" value="${esc(value)}" ${disabled}></label>`;
   }
 
   renderMetrics(spec, config) {
@@ -521,14 +1209,15 @@ export class SystemDesignStudio {
   }
 
   renderEdgeInspector(edge) {
+    const disabled = this.canEdit() ? '' : 'disabled';
     return `
       <aside class="right-panel">
         <div class="panel-head"><div class="section-title">Connection</div><div class="subtle">${esc(edge.id)}</div></div>
         <div class="panel-scroll">
-          <label><span class="mono-label">Protocol</span><select class="select" data-edge-field="protocol">${EDGE_PROTOCOLS.map((item) => `<option ${item === edge.protocol ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
-          <label style="display:block;margin-top:12px"><span class="mono-label">Serializer</span><select class="select" data-edge-field="serializer">${EDGE_SERIALIZERS.map((item) => `<option ${item === (edge.serializer || 'JSON') ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
-          ${['badge', 'retries', 'timeout', 'pool'].map((field) => `<label style="display:block;margin-top:12px"><span class="mono-label">${esc(field)}</span><input class="field" data-edge-field="${esc(field)}" value="${esc(edge[field] || '')}"></label>`).join('')}
-          ${['tls', 'compression', 'cb', 'bidir'].map((field) => `<label class="check-row"><span>${esc(field.toUpperCase())}</span><input data-edge-field="${esc(field)}" type="checkbox" ${edge[field] ? 'checked' : ''}></label>`).join('')}
+          <label><span class="mono-label">Protocol</span><select class="select" data-edge-field="protocol" ${disabled}>${EDGE_PROTOCOLS.map((item) => `<option ${item === edge.protocol ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
+          <label style="display:block;margin-top:12px"><span class="mono-label">Serializer</span><select class="select" data-edge-field="serializer" ${disabled}>${EDGE_SERIALIZERS.map((item) => `<option ${item === (edge.serializer || 'JSON') ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
+          ${['badge', 'retries', 'timeout', 'pool'].map((field) => `<label style="display:block;margin-top:12px"><span class="mono-label">${esc(field)}</span><input class="field" data-edge-field="${esc(field)}" value="${esc(edge[field] || '')}" ${disabled}></label>`).join('')}
+          ${['tls', 'compression', 'cb', 'bidir'].map((field) => `<label class="check-row"><span>${esc(field.toUpperCase())}</span><input data-edge-field="${esc(field)}" type="checkbox" ${edge[field] ? 'checked' : ''} ${disabled}></label>`).join('')}
         </div>
       </aside>`;
   }
@@ -593,6 +1282,7 @@ export class SystemDesignStudio {
     ];
     const scoreKeys = Object.keys(this.state.scores);
     const avg = scoreKeys.reduce((sum, key) => sum + this.state.scores[key], 0) / scoreKeys.length;
+    const canSeeScorecard = Boolean(this.visibility().canSeeScorecard);
     return `
       <div class="app dashboard">
         ${this.renderTopbar('review')}
@@ -608,6 +1298,7 @@ export class SystemDesignStudio {
             ${this.diagnostics().slice(0, 6).map((item) => `<div class="diag-item" style="border-left-color:${item.sev === 'critical' ? 'var(--bad)' : 'var(--warn)'}"><strong>${esc(item.title)}</strong><div class="subtle" style="font-size:12px;margin-top:4px">${esc(item.impact)}</div></div>`).join('')}
           </main>
           <aside class="review-side">
+            ${canSeeScorecard ? `
             <div class="panel-head" style="display:flex;gap:16px;align-items:center">
               <div class="icon-tile" style="width:74px;height:74px;border-radius:999px;background:conic-gradient(var(--accent) 0% ${avg / 5 * 100}%, rgba(255,255,255,.08) ${avg / 5 * 100}% 100%)"><strong style="font:800 22px var(--mono)">${avg.toFixed(1)}</strong></div>
               <div><div class="section-title">Scorecard</div><div class="subtle" style="font-size:12px">Manual interviewer assessment.</div></div>
@@ -620,8 +1311,22 @@ export class SystemDesignStudio {
                 <button class="btn good" style="flex:1" data-action="submitted">Advance</button>
                 <button class="btn danger" style="flex:1" data-action="submitted">No hire</button>
               </div>
-            </div>
+            </div>` : this.renderRestrictedReviewPanel()}
           </aside>
+        </div>
+      </div>`;
+  }
+
+  renderRestrictedReviewPanel() {
+    return `
+      <div class="panel-head">
+        <div class="section-title">Scorecard</div>
+        <div class="subtle" style="font-size:12px">Hidden from ${esc(ROLE_LABELS[this.activeRole()] || this.activeRole())}</div>
+      </div>
+      <div class="panel-scroll">
+        <div class="card stat">
+          <strong>Review visibility restricted</strong>
+          <div class="subtle" style="font-size:12.5px;margin-top:6px">Final scoring, hire/no-hire decision, and feedback are visible only to interviewer or approved panel roles.</div>
         </div>
       </div>`;
   }
@@ -630,16 +1335,47 @@ export class SystemDesignStudio {
     return `<div class="metric-row"><div class="metric-line"><span>${esc(label)}</span><strong style="font-family:var(--mono);color:${warn ? 'var(--warn)' : 'var(--accent-soft)'}">${esc(value)}</strong></div><div class="bar ${warn ? 'warn' : ''}"><span style="width:${width}"></span></div></div>`;
   }
 
-  handleClick(event) {
+  async handleClick(event) {
     const target = event.target.closest('[data-action]');
     if (!target) return;
+    if (target.disabled) return;
     const action = target.dataset.action;
+    if (action === 'authMode') this.setState({ authMode: target.dataset.mode });
+    if (action === 'signIn') await this.signIn();
+    if (action === 'signOut') this.signOut();
     if (action === 'dashboard') this.setState({ screen: 'dashboard' });
     if (action === 'setup') this.setState({ screen: 'setup' });
-    if (action === 'workspace') this.openWorkspace(target.dataset.question || this.state.question);
-    if (action === 'selectSetupQuestion') this.setState({ question: target.dataset.question });
-    if (action === 'generateLink') this.setState({ screen: 'link', candidateLink: `https://systemdesign.studio/i/${this.state.question}-priya` });
-    if (action === 'copyLink') this.toast('Candidate link copied');
+    if (action === 'workspace') {
+      const session = this.activeSession() || await this.persistSessionFromSetup();
+      if (session) this.openWorkspace(session.questionId, { sessionId: session.id });
+    }
+    if (action === 'resumeSession') {
+      const session = this.state.sessions.find((item) => item.id === target.dataset.sessionId);
+      if (session) this.openWorkspace(session.questionId, { sessionId: session.id, role: 'interviewer' });
+    }
+    if (action === 'acceptInvite') {
+      const invite = this.state.pendingInvite;
+      if (invite) this.openWorkspace(invite.session.questionId, { sessionId: invite.session.id, role: invite.role });
+    }
+    if (action === 'selectSetupQuestion') {
+      const question = questionById(target.dataset.question);
+      this.setState({
+        question: question.id,
+        draft: {
+          ...this.state.draft,
+          questionId: question.id,
+          difficulty: question.diff,
+          duration: question.dur,
+        },
+      });
+    }
+    if (action === 'questionMode') this.setState({ draft: { ...this.state.draft, questionMode: target.dataset.mode } });
+    if (action === 'generateLink') {
+      const session = await this.persistSessionFromSetup();
+      if (session) this.setState({ screen: 'link' });
+    }
+    if (action === 'copyLink') await this.copyText(this.state.candidateLink, 'Candidate link copied');
+    if (action === 'copyShareLink') await this.copyText(this.state.shareLinks[target.dataset.role], `${ROLE_LABELS[target.dataset.role]} link copied`);
     if (action === 'review') this.setState({ screen: 'review' });
     if (action === 'submitted') this.toast('Evaluation submitted');
     if (action === 'selectNode') this.setState({ selectedId: target.dataset.nodeId, selectedEdgeId: null, inspectorTab: 'general' });
@@ -648,6 +1384,8 @@ export class SystemDesignStudio {
     if (action === 'tab') this.setState({ inspectorTab: target.dataset.tab });
     if (action === 'toggleProblems') this.setState({ problemsOpen: !this.state.problemsOpen });
     if (action === 'toggleAi') this.setState({ aiOpen: !this.state.aiOpen });
+    if (action === 'tool') this.setState({ tool: target.dataset.tool });
+    if (action === 'previewRole') this.setState({ rolePreview: this.state.rolePreview === target.dataset.role ? null : target.dataset.role, aiOpen: false });
     if (action === 'traffic') this.setState({ traffic: this.state.traffic ? 0 : Number(target.dataset.value || 1000), problemsOpen: true });
     if (action === 'resetSimulation') this.setState({ traffic: 0, broken: [], constraints: [], problemsOpen: false });
     if (action === 'injectScenario') this.injectScenario(target.dataset.scenario);
@@ -657,9 +1395,92 @@ export class SystemDesignStudio {
     if (action === 'score') this.setState({ scores: { ...this.state.scores, [target.dataset.scoreKey]: Number(target.dataset.score) } });
   }
 
+  async signIn() {
+    try {
+      const body = {
+        name: this.state.login.name,
+        email: this.state.login.email,
+        password: this.state.login.password,
+      };
+      const auth = this.state.authMode === 'login'
+        ? await this.api.login(body)
+        : await this.api.signup(body);
+      this.api.setToken(auth.token);
+      const user = normalizeUser(auth.user);
+      this.saveUser(user);
+      const list = await this.api.interviews();
+      const sessions = list.interviews.map(normalizeSession).filter(Boolean);
+      this.saveSessions(sessions);
+      this.setState({
+        currentUser: user,
+        login: { name: user.name, email: user.email, password: '' },
+        sessions: this.state.pendingInvite
+          ? [this.state.pendingInvite.session, ...sessions.filter((session) => session.id !== this.state.pendingInvite.session.id)]
+          : sessions,
+        screen: this.state.pendingInvite ? 'join' : 'dashboard',
+      });
+    } catch (error) {
+      this.toast(error.message);
+    }
+  }
+
+  signOut() {
+    this.api.setToken('');
+    try {
+      this.storage?.removeItem(STORAGE_KEYS.user);
+      this.storage?.removeItem(STORAGE_KEYS.sessions);
+    } catch {
+      // Ignore storage cleanup failures.
+    }
+    this.setState({
+      ...createInitialState({ storage: this.storage, location: this.location }),
+      currentUser: null,
+      sessions: [],
+      screen: 'login',
+    });
+  }
+
+  async copyText(value, message) {
+    if (!value) {
+      this.toast('No link available yet');
+      return;
+    }
+    try {
+      await this.navigator.clipboard.writeText(value);
+      this.toast(message);
+    } catch {
+      this.toast(value);
+    }
+  }
+
+  handleInput(event) {
+    const login = event.target.closest('[data-login-field]');
+    if (login) {
+      this.state.login = { ...this.state.login, [login.dataset.loginField]: login.value };
+      return;
+    }
+    const sessionField = event.target.closest('[data-session-field]');
+    if (sessionField) {
+      const value = sessionField.dataset.sessionField === 'duration' ? Number(sessionField.value) : sessionField.value;
+      this.state.draft = { ...this.state.draft, [sessionField.dataset.sessionField]: value };
+    }
+  }
+
   handleChange(event) {
+    const permission = event.target.closest('[data-permission]');
+    if (permission) {
+      const permissions = { ...this.state.draft.permissions, [permission.dataset.permission]: permission.checked };
+      this.setState({ draft: { ...this.state.draft, permissions } });
+      return;
+    }
+    const sessionField = event.target.closest('[data-session-field]');
+    if (sessionField) {
+      const value = sessionField.dataset.sessionField === 'duration' ? Number(sessionField.value) : sessionField.value;
+      this.setState({ draft: { ...this.state.draft, [sessionField.dataset.sessionField]: value } });
+      return;
+    }
     const field = event.target.closest('[data-field]');
-    if (field && this.state.selectedId) {
+    if (field && this.state.selectedId && this.canEdit()) {
       const value = field.type === 'checkbox' ? field.checked : field.value;
       this.state.comps = this.state.comps.map((component) => {
         if (component.id !== this.state.selectedId) return component;
@@ -669,7 +1490,7 @@ export class SystemDesignStudio {
       this.render();
     }
     const edgeField = event.target.closest('[data-edge-field]');
-    if (edgeField && this.state.selectedEdgeId) {
+    if (edgeField && this.state.selectedEdgeId && this.canEdit()) {
       const value = edgeField.type === 'checkbox' ? edgeField.checked : edgeField.value;
       this.state.edges = this.state.edges.map((edge) => edge.id === this.state.selectedEdgeId ? { ...edge, [edgeField.dataset.edgeField]: value } : edge);
       this.render();
@@ -677,12 +1498,14 @@ export class SystemDesignStudio {
   }
 
   handleDragStart(event) {
+    if (!this.canEdit()) return;
     const item = event.target.closest('[data-palette-name]');
     if (!item) return;
     event.dataTransfer.setData('application/json', JSON.stringify({ name: item.dataset.paletteName, cat: item.dataset.paletteCat }));
   }
 
   handleDrop(event) {
+    if (!this.canEdit()) return;
     const canvas = event.target.closest('[data-canvas]');
     if (!canvas) return;
     event.preventDefault();
@@ -692,6 +1515,7 @@ export class SystemDesignStudio {
   }
 
   handlePointerDown(event) {
+    if (!this.canEdit()) return;
     const node = event.target.closest('[data-node-id]');
     if (!node) return;
     const component = this.state.comps.find((item) => item.id === node.dataset.nodeId);
@@ -708,7 +1532,7 @@ export class SystemDesignStudio {
   }
 
   addComponent(name, cat, x = 420, y = 180) {
-    if (!name || !cat) return;
+    if (!name || !cat || !this.canEdit()) return;
     const id = `c${Date.now()}`;
     this.setState({
       comps: [...this.state.comps, { id, type: name, cat, x: Math.round(x), y: Math.round(y), w: 150, props: {} }],
@@ -718,6 +1542,7 @@ export class SystemDesignStudio {
   }
 
   injectScenario(id) {
+    if (!this.canInjectFailures()) return;
     const ids = (predicate) => this.state.comps.filter(predicate).map((component) => component.id);
     const scenarios = {
       redis: { broken: ids((component) => /Redis|Cache/.test(component.type)), text: 'Redis down' },
@@ -735,6 +1560,7 @@ export class SystemDesignStudio {
   }
 
   toggleBreakSelected() {
+    if (!this.canInjectFailures()) return;
     const id = this.state.selectedId;
     if (!id) return;
     const broken = this.state.broken.includes(id)
@@ -744,6 +1570,7 @@ export class SystemDesignStudio {
   }
 
   deleteSelected() {
+    if (!this.canEdit()) return;
     if (this.state.selectedId) {
       const id = this.state.selectedId;
       this.setState({
