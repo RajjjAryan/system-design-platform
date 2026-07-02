@@ -10,9 +10,9 @@ This document is written for a senior designer or Figma-generation model. It sho
 
 Use these repo files as product truth:
 
-- `SystemDesign Studio Platform/SystemDesign Studio.dc.html`: current dashboard, workspace, inspector, diagnostics, simulation, review UI, and interaction logic.
-- `SystemDesign Studio Platform/sds-data.js`: palette categories, component names, icons, questions, and seed Twitter architecture.
-- `SystemDesign Studio Platform/sds-knowledge.js`: production schemas for component inspectors, metrics, costs, failure modes, diagnostics, and health scoring.
+- `public/app.js`: current dashboard, workspace, inspector, diagnostics, simulation, review UI, and interaction logic.
+- `public/sds-data.js`: palette categories, component names, icons, questions, and seed architectures.
+- `public/sds-knowledge.js`: production schemas for component inspectors, metrics, costs, failure modes, diagnostics, and health scoring.
 - `plan.md`: implementation checklist and acceptance criteria.
 
 Do not design a new landing page. Do not reposition the product as a generic whiteboard. The first impression must be a working interview simulator.
@@ -293,7 +293,7 @@ Design Payment System - Hard - Idempotency, Ledger, Consistency - 50m
 Recent architecture examples:
 
 ```text
-Twitter feed - Priya S. - 10 components - paused 12 min ago
+Saved interview workspace - current candidate - persisted architecture state
 Payment ledger - Omar K. - reviewed yesterday
 Food delivery tracking - Meera V. - shared with hiring panel
 ```

@@ -139,6 +139,7 @@ function initDb(dbPath) {
       permissions_json TEXT NOT NULL,
       architecture_json TEXT NOT NULL,
       scores_json TEXT NOT NULL,
+      review_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -153,6 +154,10 @@ function initDb(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_share_tokens_interview ON share_tokens(interview_id);
   `);
+  const interviewColumns = new Set(db.prepare('PRAGMA table_info(interviews)').all().map((column) => column.name));
+  if (!interviewColumns.has('review_json')) {
+    db.exec("ALTER TABLE interviews ADD COLUMN review_json TEXT NOT NULL DEFAULT '{}'");
+  }
   return db;
 }
 
@@ -197,6 +202,7 @@ function interviewRow(row, role = 'interviewer') {
     permissions: role === 'interviewer' ? permissions : undefined,
     architecture: visibility.canSeeArchitecture ? parseJson(row.architecture_json, null) : null,
     scores: visibility.canSeeScorecard ? parseJson(row.scores_json, {}) : undefined,
+    review: visibility.canSeeScorecard ? parseJson(row.review_json, {}) : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -291,6 +297,15 @@ function shareUrl(publicOrigin, token) {
 
 function createTokenForUser(user, tokenSecret) {
   return signToken({ sub: user.id, email: user.email, exp: Date.now() + 1000 * 60 * 60 * 24 * 30 }, tokenSecret);
+}
+
+function resolveTokenSecret(options) {
+  if (options.tokenSecret) return options.tokenSecret;
+  if (process.env.SDS_TOKEN_SECRET) return process.env.SDS_TOKEN_SECRET;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SDS_TOKEN_SECRET is required in production');
+  }
+  return randomBytes(32).toString('base64url');
 }
 
 function defaultArchitecture() {
@@ -397,8 +412,8 @@ async function routeApi(req, res, context) {
     db.prepare(`
       INSERT INTO interviews (
         id, owner_user_id, question_id, title, prompt, candidate_name, candidate_email,
-        difficulty, duration, status, permissions_json, architecture_json, scores_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        difficulty, duration, status, permissions_json, architecture_json, scores_json, review_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       interview.id,
       interview.ownerUserId,
@@ -413,6 +428,7 @@ async function routeApi(req, res, context) {
       JSON.stringify(interview.permissions),
       JSON.stringify(interview.architecture),
       JSON.stringify(interview.scores),
+      JSON.stringify(body.review || {}),
       interview.createdAt,
       interview.updatedAt,
     );
@@ -443,12 +459,13 @@ async function routeApi(req, res, context) {
       permissions,
       architecture: body.architecture || parseJson(row.architecture_json, defaultArchitecture()),
       scores: body.scores || parseJson(row.scores_json, defaultScores()),
+      review: body.review || parseJson(row.review_json, {}),
       updatedAt: new Date().toISOString(),
     };
     db.prepare(`
       UPDATE interviews
       SET title = ?, prompt = ?, candidate_name = ?, candidate_email = ?, difficulty = ?, duration = ?,
-          status = ?, permissions_json = ?, architecture_json = ?, scores_json = ?, updated_at = ?
+          status = ?, permissions_json = ?, architecture_json = ?, scores_json = ?, review_json = ?, updated_at = ?
       WHERE id = ? AND owner_user_id = ?
     `).run(
       updated.title,
@@ -461,6 +478,7 @@ async function routeApi(req, res, context) {
       JSON.stringify(updated.permissions),
       JSON.stringify(updated.architecture),
       JSON.stringify(updated.scores),
+      JSON.stringify(updated.review),
       updated.updatedAt,
       interviewId,
       user.id,
@@ -494,7 +512,7 @@ async function routeApi(req, res, context) {
   }
 
   const shareLookup = path.match(/^\/api\/share\/([^/]+)$/);
-  if (shareLookup && req.method === 'GET') {
+  if (shareLookup && (req.method === 'GET' || req.method === 'PATCH')) {
     const token = shareLookup[1];
     const share = db.prepare(`
       SELECT share_tokens.role, interviews.*
@@ -507,9 +525,37 @@ async function routeApi(req, res, context) {
       return;
     }
     const permissions = { ...DEFAULT_PERMISSIONS, ...parseJson(share.permissions_json, {}) };
+    const visibility = visibilityFor(share.role, permissions);
+    if (req.method === 'PATCH') {
+      if (!visibility.canEditCanvas) {
+        json(res, 403, { error: 'This role cannot edit the canvas' }, cors);
+        return;
+      }
+      const body = await readBody(req);
+      const architecture = body.architecture || parseJson(share.architecture_json, defaultArchitecture());
+      const canUpdateReview = share.role === 'interviewer';
+      const scores = canUpdateReview && body.scores ? body.scores : parseJson(share.scores_json, defaultScores());
+      const review = canUpdateReview && body.review ? body.review : parseJson(share.review_json, {});
+      const status = canUpdateReview && body.status ? body.status : share.status;
+      const updatedAt = new Date().toISOString();
+      db.prepare('UPDATE interviews SET architecture_json = ?, scores_json = ?, review_json = ?, status = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(architecture), JSON.stringify(scores), JSON.stringify(review), status, updatedAt, share.id);
+      const next = db.prepare(`
+        SELECT share_tokens.role, interviews.*
+        FROM share_tokens
+        JOIN interviews ON interviews.id = share_tokens.interview_id
+        WHERE share_tokens.token_hash = ?
+      `).get(hashToken(token));
+      json(res, 200, {
+        role: next.role,
+        visibility,
+        interview: interviewRow(next, next.role),
+      }, cors);
+      return;
+    }
     json(res, 200, {
       role: share.role,
-      visibility: visibilityFor(share.role, permissions),
+      visibility,
       interview: interviewRow(share, share.role),
     }, cors);
     return;
@@ -540,7 +586,7 @@ export function createApiServer(options = {}) {
   const context = {
     db,
     publicOrigin: options.publicOrigin || process.env.SDS_PUBLIC_ORIGIN || 'http://127.0.0.1:8787/',
-    tokenSecret: options.tokenSecret || process.env.SDS_TOKEN_SECRET || 'dev-secret-change-me',
+    tokenSecret: resolveTokenSecret(options),
   };
 
   return createServer(async (req, res) => {

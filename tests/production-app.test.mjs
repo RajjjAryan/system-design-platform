@@ -62,6 +62,16 @@ for (const snippet of [
 
 assert.doesNotMatch(app, /\bTODO\b|TBD|mock only/i, 'App source must not contain incomplete markers');
 
+const repoText = [
+  read('README.md'),
+  read('plan.md'),
+  read('figma-generation-spec.md'),
+  read('tests/create-interview-flow.test.mjs'),
+].join('\n');
+
+assert.doesNotMatch(repoText, /SystemDesign Studio Platform|SystemDesign\.dc\.html|Candidate: Priya S\.|prototype source/, 'Repo docs/tests must not reference deleted prototype artifacts');
+assert.doesNotMatch(read('server/api-server.mjs'), /dev-secret-change-me/, 'API server must not ship a hard-coded token secret fallback');
+
 const appModule = await import('../public/app.js?source-test=' + Date.now());
 assert.equal(typeof appModule.SystemDesignStudio, 'function', 'App module must be importable and export SystemDesignStudio');
 

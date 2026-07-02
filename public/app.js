@@ -119,8 +119,16 @@ class ApiClient {
     return this.request(`/api/interviews/${encodeURIComponent(id)}/share`, { method: 'POST' });
   }
 
+  updateInterview(id, body) {
+    return this.request(`/api/interviews/${encodeURIComponent(id)}`, { method: 'PATCH', body });
+  }
+
   share(token) {
     return this.request(`/api/share/${encodeURIComponent(token)}`, { token: '' });
+  }
+
+  updateSharedInterview(token, body) {
+    return this.request(`/api/share/${encodeURIComponent(token)}`, { method: 'PATCH', body, token: '' });
   }
 }
 
@@ -201,6 +209,9 @@ function normalizeSession(session) {
     duration: Number(session.duration || question.dur),
     status: session.status || 'draft',
     permissions: { ...DEFAULT_PERMISSIONS, ...(session.permissions || {}) },
+    architecture: session.architecture || { comps: [], edges: [], comments: [] },
+    scores: session.scores || {},
+    review: session.review || {},
     updatedAt: session.updatedAt || new Date().toISOString(),
     createdAt: session.createdAt || session.updatedAt || new Date().toISOString(),
   };
@@ -329,6 +340,13 @@ export function createInitialState({ storage, location } = {}) {
     shareLinks: {},
     candidateLink: '',
     interviewerLink: '',
+    pan: { x: 0, y: 0 },
+    connectionStartId: null,
+    paletteQuery: '',
+    comments: activeSession?.architecture?.comments || [],
+    saveState: activeSession ? 'saved' : 'idle',
+    reviewFeedback: activeSession?.review?.feedback || '',
+    reviewDecision: activeSession?.review?.decision || '',
     comps: [],
     edges: [],
     selectedId: null,
@@ -378,7 +396,7 @@ export class SystemDesignStudio {
     this.root.addEventListener('drop', (event) => this.handleDrop(event));
     this.root.addEventListener('pointerdown', (event) => this.handlePointerDown(event));
     window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
-    window.addEventListener('pointerup', () => { this.drag = null; });
+    window.addEventListener('pointerup', () => { void this.handlePointerUp(); });
     this.render();
     void this.bootstrapFromApi();
   }
@@ -454,10 +472,76 @@ export class SystemDesignStudio {
     return normalized;
   }
 
+  architecturePayload() {
+    return {
+      comps: this.state.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+      edges: this.state.edges.map((edge) => ({ ...edge })),
+      comments: this.state.comments.map((comment) => ({ ...comment })),
+    };
+  }
+
+  updateActiveSessionPatch(patch) {
+    const active = this.activeSession();
+    if (!active) return null;
+    const updated = normalizeSession({ ...active, ...patch, updatedAt: new Date().toISOString() });
+    this.state.sessions = [updated, ...this.state.sessions.filter((session) => session.id !== updated.id)];
+    this.saveSessions(this.state.sessions);
+    return updated;
+  }
+
+  async persistArchitecture() {
+    const active = this.updateActiveSessionPatch({ architecture: this.architecturePayload() });
+    if (!active) return;
+    this.setState({ saveState: 'saving' });
+    try {
+      const body = { architecture: active.architecture };
+      const result = this.state.pendingShareToken
+        ? await this.api.updateSharedInterview(this.state.pendingShareToken, body)
+        : await this.api.updateInterview(active.id, body);
+      const saved = this.upsertSession(result.interview);
+      this.setState({ saveState: 'saved', activeSessionId: saved.id });
+    } catch (error) {
+      this.setState({ saveState: 'save failed' });
+      this.toast(error.message);
+    }
+  }
+
+  async saveReview(decision) {
+    const active = this.activeSession();
+    if (!active) return;
+    const review = {
+      decision,
+      feedback: this.state.reviewFeedback.trim(),
+      submittedAt: new Date().toISOString(),
+      submittedBy: this.state.currentUser?.email || this.activeRole(),
+    };
+    this.setState({ reviewDecision: decision, saveState: 'saving' });
+    try {
+      const body = {
+        status: 'reviewed',
+        scores: this.state.scores,
+        review,
+        architecture: this.architecturePayload(),
+      };
+      const result = this.state.pendingShareToken
+        ? await this.api.updateSharedInterview(this.state.pendingShareToken, body)
+        : await this.api.updateInterview(active.id, body);
+      const saved = this.upsertSession(result.interview);
+      this.setState({ saveState: 'saved', activeSessionId: saved.id });
+      this.toast('Review saved');
+    } catch (error) {
+      this.setState({ saveState: 'save failed' });
+      this.toast(error.message);
+    }
+  }
+
   sessionPayloadFromDraft() {
     const draft = this.state.draft;
     const question = questionById(draft.questionId);
     const spec = QUESTION_SPEC[question.id] || QUESTION_SPEC.twitter;
+    const architecture = this.state.comps.length
+      ? this.architecturePayload()
+      : this.seedFor(question.id);
     return {
       questionId: question.id,
       title: draft.questionMode === 'custom' && draft.customPrompt ? `Custom ${question.title}` : question.title,
@@ -467,7 +551,7 @@ export class SystemDesignStudio {
       difficulty: draft.difficulty || question.diff,
       duration: Number(draft.duration || question.dur),
       permissions: draft.permissions,
-      architecture: { comps: this.state.comps, edges: this.state.edges },
+      architecture,
       scores: this.state.scores,
     };
   }
@@ -526,6 +610,7 @@ export class SystemDesignStudio {
       return {
         comps: SEED.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
         edges: SEED.edges.map((edge) => ({ ...edge })),
+        comments: [],
       };
     }
     const comps = SEED.comps.slice(0, 8).map((component, index) => ({
@@ -538,19 +623,30 @@ export class SystemDesignStudio {
     return {
       comps,
       edges: SEED.edges.filter((edge) => comps.some((component) => component.id === edge.from) && comps.some((component) => component.id === edge.to)).map((edge) => ({ ...edge })),
+      comments: [],
     };
   }
 
   openWorkspace(question = this.state.question, options = {}) {
-    const seed = this.seedFor(question);
+    const session = options.sessionId
+      ? this.state.sessions.find((item) => item.id === options.sessionId)
+      : this.activeSession();
+    const persisted = session?.architecture;
+    const seed = persisted?.comps?.length ? persisted : this.seedFor(question);
     this.setState({
       screen: 'workspace',
       question,
       role: options.role || this.state.role || 'interviewer',
       rolePreview: options.rolePreview || null,
       activeSessionId: options.sessionId || this.state.activeSessionId,
-      comps: seed.comps,
-      edges: seed.edges,
+      comps: (seed.comps || []).map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+      edges: (seed.edges || []).map((edge) => ({ ...edge })),
+      comments: (seed.comments || []).map((comment) => ({ ...comment })),
+      pan: { x: 0, y: 0 },
+      connectionStartId: null,
+      saveState: session ? 'saved' : 'idle',
+      reviewFeedback: session?.review?.feedback || '',
+      reviewDecision: session?.review?.decision || '',
       selectedId: null,
       selectedEdgeId: null,
       broken: [],
@@ -1001,22 +1097,27 @@ export class SystemDesignStudio {
           </div>
         </aside>`;
     }
+    const query = this.state.paletteQuery.trim().toLowerCase();
     return `
       <aside class="left-panel">
         <div class="panel-head">
           <div class="section-title">Components</div>
-          <input class="palette-search" aria-label="Filter components">
+          <input class="palette-search" data-palette-search aria-label="Filter components" value="${esc(this.state.paletteQuery)}" placeholder="Search components">
         </div>
         <div class="panel-scroll">
-          ${PALETTE.map((group) => `
+          ${PALETTE.map((group) => {
+            const items = group.items.filter((item) => !query || item.toLowerCase().includes(query) || group.cat.toLowerCase().includes(query));
+            if (!items.length) return '';
+            return `
             <div class="palette-group">
               <div class="mono-label" style="color:${group.color};margin:0 0 7px 6px">${esc(group.cat)}</div>
-              ${group.items.map((item) => `
+              ${items.map((item) => `
                 <button class="palette-item" draggable="true" data-palette-name="${esc(item)}" data-palette-cat="${esc(group.cat)}" data-action="addComponent">
                   <span class="icon-tile" style="color:${group.color};background:${group.color}22">${this.iconForName(item, 16)}</span>
                   <span>${esc(item)}</span>
                 </button>`).join('')}
-            </div>`).join('')}
+            </div>`;
+          }).join('') || '<div class="subtle" style="padding:12px">No matching components.</div>'}
         </div>
       </aside>`;
   }
@@ -1039,10 +1140,11 @@ export class SystemDesignStudio {
             ${(spec.functional || []).slice(0, 4).map((item) => `<div style="font-size:12px;margin-top:6px;color:var(--text-2)">+ ${esc(item)}</div>`).join('')}`
           : '<p class="subtle" style="font-size:12.5px;line-height:1.45">Question details are hidden for this role.</p>'}
         </div>
-        <div class="canvas-layer">
+        <div class="canvas-layer" style="transform:translate(${this.state.pan.x}px, ${this.state.pan.y}px)">
           <svg class="edges">${this.state.edges.map((edge) => this.renderEdgePath(edge, byId)).join('')}</svg>
           ${this.state.edges.map((edge) => this.renderEdgeLabel(edge, byId)).join('')}
           ${this.state.comps.map((component) => this.renderNode(component, diagnostics, affected)).join('')}
+          ${this.renderComments()}
         </div>
         ${this.state.problemsOpen ? this.renderDiagnostics() : ''}
       </section>`;
@@ -1069,6 +1171,14 @@ export class SystemDesignStudio {
           <span class="subtle" style="font-size:11px">${esc(component.cat)}</span>
         </span>
       </div>`;
+  }
+
+  renderComments() {
+    return this.state.comments.map((comment) => `
+      <div class="canvas-comment" data-comment-id="${esc(comment.id)}" style="left:${comment.x}px;top:${comment.y}px">
+        <textarea data-comment-id="${esc(comment.id)}" aria-label="Architecture comment">${esc(comment.text)}</textarea>
+        <button class="btn icon-btn" data-action="deleteComment" data-comment-id="${esc(comment.id)}" title="Delete comment">x</button>
+      </div>`).join('');
   }
 
   renderEdgePath(edge, byId) {
@@ -1242,20 +1352,35 @@ export class SystemDesignStudio {
   }
 
   renderAiPanel() {
-    const hints = [
-      ['Potential SPOF', 'Redis cache has no replica or fallback path under failure.', 'var(--bad-2)'],
-      ['Missing component', 'No rate limiter sits between the gateway and hot services.', 'var(--accent-2)'],
-      ['Bottleneck', 'The write path can saturate before fan-out catches up.', 'var(--warn)'],
-      ['Follow-up', 'Ask how the candidate handles celebrity fan-out.', 'var(--ai)'],
-    ];
+    const hints = this.renderDynamicAiHints();
     return `
       <aside class="right-panel">
-        <div class="panel-head"><div class="section-title">AI hints</div><div class="subtle" style="font-size:12px">Critique only. No generated answers.</div></div>
+        <div class="panel-head"><div class="section-title">AI hints</div><div class="subtle" style="font-size:12px">Critique and follow-up prompts for the interviewer.</div></div>
         <div class="panel-scroll">
           ${hints.map(([title, body, color]) => `<div class="card stat" style="border-left:3px solid ${color};border-radius:0 8px 8px 0;margin-bottom:10px"><strong style="color:${color}">${title}</strong><div class="subtle" style="font-size:12.5px;margin-top:5px">${body}</div></div>`).join('')}
           <button class="btn" style="width:100%" data-action="toggleAi">Back to inspector</button>
         </div>
       </aside>`;
+  }
+
+  renderDynamicAiHints() {
+    const diagnostics = this.diagnostics();
+    const spec = QUESTION_SPEC[this.state.question] || QUESTION_SPEC.twitter;
+    const hints = diagnostics.slice(0, 4).map((item) => [
+      item.sev === 'critical' ? `Critical: ${item.title}` : item.title,
+      `${item.impact} Suggested fix: ${item.fix}`,
+      item.sev === 'critical' ? 'var(--bad-2)' : item.sev === 'warn' ? 'var(--warn)' : 'var(--accent-2)',
+    ]);
+    if (!this.state.comps.some((component) => /Rate Limiter|Gateway/.test(component.type))) {
+      hints.push(['Missing control', 'Ask where rate limiting, quota, and abuse controls belong in the request path.', 'var(--accent-2)']);
+    }
+    if (this.state.traffic) {
+      hints.push(['Load follow-up', `Traffic is simulated at x${this.state.traffic}; ask which components saturate first and how they shed load.`, 'var(--warn)']);
+    }
+    for (const followup of (spec.followups || []).slice(0, 2)) {
+      hints.push(['Interview follow-up', followup, 'var(--ai)']);
+    }
+    return hints.length ? hints.slice(0, 6) : [['Architecture check', 'Ask the candidate to justify the primary bottleneck and failure domain.', 'var(--ai)']];
   }
 
   renderStatusbar() {
@@ -1267,7 +1392,7 @@ export class SystemDesignStudio {
         <span class="status-chip">Traffic ${this.state.traffic ? 'x' + this.state.traffic : 'baseline'}</span>
         <span class="status-chip">${this.diagnostics().length} diagnostics</span>
         <span class="spacer"></span>
-        <span>Saved locally - deployable static artifact</span>
+        <span>Persistence: ${esc(this.state.saveState)}</span>
       </footer>`;
   }
 
@@ -1306,10 +1431,10 @@ export class SystemDesignStudio {
             <div class="panel-scroll">
               ${scoreKeys.map((key) => `<div class="check-row"><span>${esc(key)}</span><span>${[1, 2, 3, 4, 5].map((n) => `<button class="score-dot ${n <= this.state.scores[key] ? 'on' : ''}" data-action="score" data-score-key="${esc(key)}" data-score="${n}"></button>`).join('')}</span></div>`).join('')}
               <div class="mono-label" style="margin-top:18px">Final feedback</div>
-              <textarea class="textarea" aria-label="Overall feedback for the loop debrief" style="margin-top:8px"></textarea>
+              <textarea class="textarea" data-review-field="feedback" aria-label="Overall feedback for the loop debrief" style="margin-top:8px">${esc(this.state.reviewFeedback)}</textarea>
               <div style="display:flex;gap:9px;margin-top:12px">
-                <button class="btn good" style="flex:1" data-action="submitted">Advance</button>
-                <button class="btn danger" style="flex:1" data-action="submitted">No hire</button>
+                <button class="btn good" style="flex:1" data-action="submitted" data-decision="advance">Advance</button>
+                <button class="btn danger" style="flex:1" data-action="submitted" data-decision="no-hire">No hire</button>
               </div>
             </div>` : this.renderRestrictedReviewPanel()}
           </aside>
@@ -1337,7 +1462,10 @@ export class SystemDesignStudio {
 
   async handleClick(event) {
     const target = event.target.closest('[data-action]');
-    if (!target) return;
+    if (!target) {
+      this.handleCanvasClick(event);
+      return;
+    }
     if (target.disabled) return;
     const action = target.dataset.action;
     if (action === 'authMode') this.setState({ authMode: target.dataset.mode });
@@ -1346,6 +1474,15 @@ export class SystemDesignStudio {
     if (action === 'dashboard') this.setState({ screen: 'dashboard' });
     if (action === 'setup') this.setState({ screen: 'setup' });
     if (action === 'workspace') {
+      if (this.state.screen === 'dashboard' && target.dataset.question) {
+        const question = questionById(target.dataset.question);
+        this.setState({
+          screen: 'setup',
+          question: question.id,
+          draft: { ...createDefaultDraft(this.state.currentUser, question.id), questionId: question.id },
+        });
+        return;
+      }
       const session = this.activeSession() || await this.persistSessionFromSetup();
       if (session) this.openWorkspace(session.questionId, { sessionId: session.id });
     }
@@ -1377,8 +1514,11 @@ export class SystemDesignStudio {
     if (action === 'copyLink') await this.copyText(this.state.candidateLink, 'Candidate link copied');
     if (action === 'copyShareLink') await this.copyText(this.state.shareLinks[target.dataset.role], `${ROLE_LABELS[target.dataset.role]} link copied`);
     if (action === 'review') this.setState({ screen: 'review' });
-    if (action === 'submitted') this.toast('Evaluation submitted');
-    if (action === 'selectNode') this.setState({ selectedId: target.dataset.nodeId, selectedEdgeId: null, inspectorTab: 'general' });
+    if (action === 'submitted') await this.saveReview(target.dataset.decision);
+    if (action === 'selectNode') {
+      if (this.state.tool === 'connect' && this.canEdit()) this.createConnection(target.dataset.nodeId);
+      else this.setState({ selectedId: target.dataset.nodeId, selectedEdgeId: null, inspectorTab: 'general' });
+    }
     if (action === 'selectEdge') this.setState({ selectedEdgeId: target.dataset.edgeId, selectedId: null });
     if (action === 'selectDiagnostic') this.setState({ selectedId: target.dataset.nodeId || null, selectedEdgeId: null, problemsOpen: true });
     if (action === 'tab') this.setState({ inspectorTab: target.dataset.tab });
@@ -1391,6 +1531,7 @@ export class SystemDesignStudio {
     if (action === 'injectScenario') this.injectScenario(target.dataset.scenario);
     if (action === 'breakSelected') this.toggleBreakSelected();
     if (action === 'deleteSelected') this.deleteSelected();
+    if (action === 'deleteComment') this.deleteComment(target.dataset.commentId);
     if (action === 'addComponent') this.addComponent(target.dataset.paletteName, target.dataset.paletteCat);
     if (action === 'score') this.setState({ scores: { ...this.state.scores, [target.dataset.scoreKey]: Number(target.dataset.score) } });
   }
@@ -1454,6 +1595,11 @@ export class SystemDesignStudio {
   }
 
   handleInput(event) {
+    const paletteSearch = event.target.closest('[data-palette-search]');
+    if (paletteSearch) {
+      this.setState({ paletteQuery: paletteSearch.value });
+      return;
+    }
     const login = event.target.closest('[data-login-field]');
     if (login) {
       this.state.login = { ...this.state.login, [login.dataset.loginField]: login.value };
@@ -1463,6 +1609,16 @@ export class SystemDesignStudio {
     if (sessionField) {
       const value = sessionField.dataset.sessionField === 'duration' ? Number(sessionField.value) : sessionField.value;
       this.state.draft = { ...this.state.draft, [sessionField.dataset.sessionField]: value };
+      return;
+    }
+    const comment = event.target.closest('[data-comment-id]');
+    if (comment && event.target.tagName === 'TEXTAREA') {
+      this.state.comments = this.state.comments.map((item) => item.id === comment.dataset.commentId ? { ...item, text: event.target.value } : item);
+      return;
+    }
+    const review = event.target.closest('[data-review-field]');
+    if (review) {
+      this.state.reviewFeedback = review.value;
     }
   }
 
@@ -1488,12 +1644,18 @@ export class SystemDesignStudio {
         return { ...component, props: { ...(component.props || {}), [field.dataset.field]: value } };
       });
       this.render();
+      void this.persistArchitecture();
     }
     const edgeField = event.target.closest('[data-edge-field]');
     if (edgeField && this.state.selectedEdgeId && this.canEdit()) {
       const value = edgeField.type === 'checkbox' ? edgeField.checked : edgeField.value;
       this.state.edges = this.state.edges.map((edge) => edge.id === this.state.selectedEdgeId ? { ...edge, [edgeField.dataset.edgeField]: value } : edge);
       this.render();
+      void this.persistArchitecture();
+    }
+    const comment = event.target.closest('[data-comment-id]');
+    if (comment && event.target.tagName === 'TEXTAREA') {
+      void this.persistArchitecture();
     }
   }
 
@@ -1515,20 +1677,46 @@ export class SystemDesignStudio {
   }
 
   handlePointerDown(event) {
-    if (!this.canEdit()) return;
+    const canvas = event.target.closest('[data-canvas]');
+    if (this.state.tool === 'pan' && canvas) {
+      this.drag = { kind: 'pan', x: event.clientX, y: event.clientY, ox: this.state.pan.x, oy: this.state.pan.y };
+      return;
+    }
+    if (!this.canEdit() || this.state.tool === 'connect' || this.state.tool === 'comment') return;
     const node = event.target.closest('[data-node-id]');
     if (!node) return;
     const component = this.state.comps.find((item) => item.id === node.dataset.nodeId);
     if (!component) return;
-    this.drag = { id: component.id, x: event.clientX, y: event.clientY, ox: component.x, oy: component.y };
+    this.drag = { kind: 'node', id: component.id, x: event.clientX, y: event.clientY, ox: component.x, oy: component.y };
   }
 
   handlePointerMove(event) {
     if (!this.drag) return;
     const dx = event.clientX - this.drag.x;
     const dy = event.clientY - this.drag.y;
-    this.state.comps = this.state.comps.map((component) => component.id === this.drag.id ? { ...component, x: Math.round(this.drag.ox + dx), y: Math.round(this.drag.oy + dy) } : component);
-    this.render();
+    if (this.drag.kind === 'pan') {
+      this.state.pan = { x: Math.round(this.drag.ox + dx), y: Math.round(this.drag.oy + dy) };
+      this.render();
+      return;
+    }
+    if (this.drag.kind === 'node') {
+      this.state.comps = this.state.comps.map((component) => component.id === this.drag.id ? { ...component, x: Math.round(this.drag.ox + dx), y: Math.round(this.drag.oy + dy) } : component);
+      this.render();
+    }
+  }
+
+  async handlePointerUp() {
+    const finished = this.drag;
+    this.drag = null;
+    if (finished?.kind === 'node') await this.persistArchitecture();
+  }
+
+  handleCanvasClick(event) {
+    if (this.state.tool !== 'comment' || !this.canEdit()) return;
+    const canvas = event.target.closest('[data-canvas]');
+    if (!canvas || event.target.closest('[data-node-id], [data-comment-id], .edge-label')) return;
+    const rect = canvas.getBoundingClientRect();
+    this.addCanvasComment(event.clientX - rect.left - this.state.pan.x, event.clientY - rect.top - this.state.pan.y);
   }
 
   addComponent(name, cat, x = 420, y = 180) {
@@ -1539,6 +1727,59 @@ export class SystemDesignStudio {
       selectedId: id,
       selectedEdgeId: null,
     });
+    void this.persistArchitecture();
+  }
+
+  createConnection(nodeId) {
+    if (!nodeId || !this.byId()[nodeId]) return;
+    if (!this.state.connectionStartId) {
+      this.setState({ connectionStartId: nodeId, selectedId: nodeId, selectedEdgeId: null });
+      this.toast('Select target component');
+      return;
+    }
+    if (this.state.connectionStartId === nodeId) {
+      this.setState({ connectionStartId: null });
+      return;
+    }
+    const edge = {
+      id: `e${Date.now()}`,
+      from: this.state.connectionStartId,
+      to: nodeId,
+      protocol: 'gRPC',
+      serializer: 'JSON',
+      tls: true,
+      retries: '2',
+      timeout: '500ms',
+      pool: '64',
+    };
+    this.setState({
+      edges: [...this.state.edges, edge],
+      selectedId: null,
+      selectedEdgeId: edge.id,
+      connectionStartId: null,
+    });
+    void this.persistArchitecture();
+  }
+
+  addCanvasComment(x, y) {
+    const text = typeof window !== 'undefined' && typeof window.prompt === 'function'
+      ? window.prompt('Add architecture comment', 'Investigate this tradeoff')
+      : 'Investigate this tradeoff';
+    if (!text) return;
+    const comment = {
+      id: `note-${Date.now()}`,
+      x: Math.round(x),
+      y: Math.round(y),
+      text: String(text).trim(),
+    };
+    this.setState({ comments: [...this.state.comments, comment] });
+    void this.persistArchitecture();
+  }
+
+  deleteComment(commentId) {
+    if (!commentId || !this.canEdit()) return;
+    this.setState({ comments: this.state.comments.filter((comment) => comment.id !== commentId) });
+    void this.persistArchitecture();
   }
 
   injectScenario(id) {
@@ -1557,6 +1798,7 @@ export class SystemDesignStudio {
       constraints: [...this.state.constraints, scenario.text],
       problemsOpen: true,
     });
+    void this.persistArchitecture();
   }
 
   toggleBreakSelected() {
@@ -1567,6 +1809,7 @@ export class SystemDesignStudio {
       ? this.state.broken.filter((item) => item !== id)
       : [...this.state.broken, id];
     this.setState({ broken });
+    void this.persistArchitecture();
   }
 
   deleteSelected() {
@@ -1578,9 +1821,11 @@ export class SystemDesignStudio {
         edges: this.state.edges.filter((edge) => edge.from !== id && edge.to !== id),
         selectedId: null,
       });
+      void this.persistArchitecture();
     }
     if (this.state.selectedEdgeId) {
       this.setState({ edges: this.state.edges.filter((edge) => edge.id !== this.state.selectedEdgeId), selectedEdgeId: null });
+      void this.persistArchitecture();
     }
   }
 

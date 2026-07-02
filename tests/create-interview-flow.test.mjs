@@ -17,7 +17,7 @@ const requiredSnippets = [
 for (const snippet of requiredSnippets) {
   assert.ok(
     source.includes(snippet),
-    `Expected prototype source to include ${JSON.stringify(snippet)}`,
+    `Expected app source to include ${JSON.stringify(snippet)}`,
   );
 }
 

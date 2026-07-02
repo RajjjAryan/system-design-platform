@@ -549,6 +549,40 @@ textarea:disabled {
   box-shadow: 0 0 22px rgba(245, 158, 11, 0.46);
 }
 
+.canvas-comment {
+  position: absolute;
+  width: 210px;
+  min-height: 88px;
+  padding: 8px;
+  border: 1px solid rgba(232, 121, 249, 0.35);
+  border-radius: 8px;
+  background: rgba(40, 20, 48, 0.92);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  z-index: 5;
+}
+
+.canvas-comment textarea {
+  width: 100%;
+  min-height: 62px;
+  border: 0;
+  resize: vertical;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.4;
+  outline: none;
+}
+
+.canvas-comment .icon-btn {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  font-size: 11px;
+}
+
 .diag-dot {
   position: absolute;
   top: -7px;
