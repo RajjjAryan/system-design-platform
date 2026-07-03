@@ -167,6 +167,19 @@ function shortId(prefix = 'sds') {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function customPromptText(draft) {
+  return String(draft?.customPrompt || '').trim();
+}
+
+function isCustomDraft(draft) {
+  return draft?.questionMode === 'custom' && customPromptText(draft).length > 0;
+}
+
+function titleFromPrompt(prompt, fallback = 'Custom interview') {
+  const firstLine = String(prompt || '').split('\n').map((line) => line.trim()).find(Boolean) || fallback;
+  return firstLine.length > 72 ? `${firstLine.slice(0, 69)}...` : firstLine;
+}
+
 function normalizeUser(user) {
   if (!user) return null;
   const email = normalizeEmail(user.email);
@@ -238,14 +251,16 @@ export function createSessionFromDraft({ user, draft, questionId = draft?.questi
   const spec = QUESTION_SPEC[question.id] || QUESTION_SPEC.twitter;
   const now = new Date().toISOString();
   const candidateName = String(draft?.candidateName || '').trim() || 'Candidate';
+  const customPrompt = customPromptText(draft);
+  const custom = isCustomDraft(draft);
   return normalizeSession({
     id: draft?.sessionId || shortId(slugify(`${question.id}-${candidateName}`)),
-    title: draft?.questionMode === 'custom' && draft?.customPrompt
-      ? `Custom ${question.title}`
+    title: custom
+      ? titleFromPrompt(customPrompt)
       : question.title,
     questionId: question.id,
-    prompt: draft?.questionMode === 'custom' && draft?.customPrompt
-      ? String(draft.customPrompt).trim()
+    prompt: custom
+      ? customPrompt
       : spec.statement,
     owner: normalizeUser(user) || { name: 'Interviewer', email: '' },
     candidate: {
@@ -309,6 +324,7 @@ export function createInitialState({ storage, location } = {}) {
     inspectorTab: 'general',
     broken: [],
     traffic: 0,
+    zoom: 1,
     constraints: [],
     problemsOpen: false,
     aiOpen: false,
@@ -597,17 +613,18 @@ export class SystemDesignStudio {
     const draft = this.state.draft;
     const question = questionById(draft.questionId);
     const spec = QUESTION_SPEC[question.id] || QUESTION_SPEC.twitter;
-    const architecture = this.architecturePayload();
+    const customPrompt = customPromptText(draft);
+    const custom = isCustomDraft(draft);
     return {
       questionId: question.id,
-      title: draft.questionMode === 'custom' && draft.customPrompt ? `Custom ${question.title}` : question.title,
-      prompt: draft.questionMode === 'custom' && draft.customPrompt ? draft.customPrompt : spec.statement,
+      title: custom ? titleFromPrompt(customPrompt) : question.title,
+      prompt: custom ? customPrompt : spec.statement,
       candidateName: draft.candidateName || 'Candidate',
       candidateEmail: draft.candidateEmail,
       difficulty: draft.difficulty || question.diff,
       duration: Number(draft.duration || question.dur),
       permissions: draft.permissions,
-      architecture,
+      architecture: { comps: [], edges: [], comments: [] },
       scores: this.state.scores,
     };
   }
@@ -637,6 +654,29 @@ export class SystemDesignStudio {
     return this.upsertSession(session);
   }
 
+  startNewInterviewSetup(questionId = this.state.question || 'twitter') {
+    const question = questionById(questionId);
+    this.closeSharedSocket();
+    this.setState({
+      screen: 'setup',
+      question: question.id,
+      draft: createDefaultDraft(this.state.currentUser, question.id),
+      activeSessionId: null,
+      shareLinks: {},
+      candidateLink: '',
+      interviewerLink: '',
+      comps: [],
+      edges: [],
+      comments: [],
+      selectedId: null,
+      selectedEdgeId: null,
+      pan: { x: 0, y: 0 },
+      zoom: 1,
+      connectionStartId: null,
+      saveState: 'idle',
+    });
+  }
+
   openWorkspace(question = this.state.question, options = {}) {
     const session = options.sessionId
       ? this.state.sessions.find((item) => item.id === options.sessionId)
@@ -660,6 +700,7 @@ export class SystemDesignStudio {
       selectedEdgeId: null,
       broken: [],
       traffic: 0,
+      zoom: 1,
       constraints: [],
       problemsOpen: false,
       aiOpen: false,
@@ -739,6 +780,17 @@ export class SystemDesignStudio {
 
   canSubmitReview() {
     return Boolean(this.visibility().canSubmitReview);
+  }
+
+  isCustomActiveSession() {
+    const active = this.activeSession();
+    if (!active) return false;
+    const spec = QUESTION_SPEC[active.questionId] || null;
+    return Boolean(active.prompt && spec?.statement && active.prompt.trim() !== spec.statement.trim());
+  }
+
+  setZoom(value) {
+    this.setState({ zoom: Math.round(clamp(Number(value) || 1, 0.5, 2) * 100) / 100 });
   }
 
   async refreshActiveSession({ force = false } = {}) {
@@ -1143,6 +1195,9 @@ export class SystemDesignStudio {
           <button class="btn icon-btn ${this.state.tool === 'pan' ? 'active' : ''}" data-action="tool" data-tool="pan" title="Pan">${this.icon('net', 16)}</button>
           <button class="btn icon-btn ${this.state.tool === 'connect' ? 'active' : ''}" data-action="tool" data-tool="connect" title="Connect">${this.icon('stream', 16)}</button>
           <button class="btn icon-btn ${this.state.tool === 'comment' ? 'active' : ''}" data-action="tool" data-tool="comment" title="Comment">${this.icon('bell', 16)}</button>
+          <button class="btn icon-btn" data-action="zoomOut" title="Zoom out">-</button>
+          <span class="pill role-pill">${Math.round((this.state.zoom || 1) * 100)}%</span>
+          <button class="btn icon-btn" data-action="zoomIn" title="Zoom in">+</button>
           <span class="pill role-pill">${esc(ROLE_LABELS[role] || role)}</span>
           <div class="spacer"></div>
           ${this.canInjectFailures() ? `
@@ -1208,20 +1263,25 @@ export class SystemDesignStudio {
     const affected = this.affectedNodes();
     const diagnostics = this.diagnostics();
     const spec = QUESTION_SPEC[this.state.question] || QUESTION_SPEC.twitter;
+    const active = this.activeSession();
+    const custom = this.isCustomActiveSession();
+    const title = active?.title || (QUESTIONS.find((q) => q.id === this.state.question) || QUESTIONS[0]).title;
+    const difficulty = active?.difficulty || questionById(this.state.question).diff;
     return `
       <section class="canvas-wrap" data-canvas>
         <div class="question-panel card">
           <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
-            <strong>${esc((QUESTIONS.find((q) => q.id === this.state.question) || QUESTIONS[0]).title)}</strong>
-            <span class="pill" style="color:var(--bad-2)">Hard</span>
+            <strong>${esc(title)}</strong>
+            <span class="pill" style="color:var(--bad-2)">${esc(difficulty)}</span>
           </div>
           ${this.visibility().canSeeQuestion ? `
-            <p class="subtle" style="font-size:12.5px;line-height:1.45">${esc(this.activeSession()?.prompt || spec.statement || 'Design the system and explain tradeoffs.')}</p>
-            <div class="mono-label">Requirements</div>
-            ${(spec.functional || []).slice(0, 4).map((item) => `<div style="font-size:12px;margin-top:6px;color:var(--text-2)">+ ${esc(item)}</div>`).join('')}`
+            <p class="subtle" style="font-size:12.5px;line-height:1.45">${esc(active?.prompt || spec.statement || 'Design the system and explain tradeoffs.')}</p>
+            ${custom ? '<div class="mono-label">Custom prompt</div>' : `<div class="mono-label">Requirements</div>
+            ${(spec.functional || []).slice(0, 4).map((item) => `<div style="font-size:12px;margin-top:6px;color:var(--text-2)">+ ${esc(item)}</div>`).join('')}`}`
           : '<p class="subtle" style="font-size:12.5px;line-height:1.45">Question details are hidden for this role.</p>'}
         </div>
-        <div class="canvas-layer" style="transform:translate(${this.state.pan.x}px, ${this.state.pan.y}px)">
+        ${this.state.connectionStartId ? '<div class="connection-hint">Choose a target component to create the connection</div>' : ''}
+        <div class="canvas-layer" style="transform:translate(${this.state.pan.x}px, ${this.state.pan.y}px) scale(${this.state.zoom || 1})">
           <svg class="edges">${this.state.edges.map((edge) => this.renderEdgePath(edge, byId)).join('')}</svg>
           ${this.state.edges.map((edge) => this.renderEdgeLabel(edge, byId)).join('')}
           ${this.state.comps.map((component) => this.renderNode(component, diagnostics, affected)).join('')}
@@ -1245,6 +1305,7 @@ export class SystemDesignStudio {
     ].filter(Boolean).join(' ');
     return `
       <div class="${className}" data-node-id="${esc(component.id)}" data-action="selectNode" style="left:${component.x}px;top:${component.y}px">
+        ${this.canEdit() ? `<button class="node-connect" data-action="startConnection" data-node-id="${esc(component.id)}" title="Connect this component">+</button>` : ''}
         ${severity ? `<span class="diag-dot ${severity}">${nodeDiagnostics.length}</span>` : ''}
         <span class="icon-tile" style="color:${color};background:${color}22">${this.iconForName(component.base || component.type, 18)}</span>
         <span style="min-width:0">
@@ -1556,22 +1617,10 @@ export class SystemDesignStudio {
       this.closeSharedSocket();
       this.setState({ screen: 'dashboard' });
     }
-    if (action === 'setup') this.setState({ screen: 'setup' });
+    if (action === 'setup') this.startNewInterviewSetup(this.state.question);
     if (action === 'workspace') {
       if (this.state.screen === 'dashboard' && target.dataset.question) {
-        const question = questionById(target.dataset.question);
-        this.setState({
-          screen: 'setup',
-          question: question.id,
-          draft: { ...createDefaultDraft(this.state.currentUser, question.id), questionId: question.id },
-          activeSessionId: null,
-          shareLinks: {},
-          candidateLink: '',
-          interviewerLink: '',
-          comps: [],
-          edges: [],
-          comments: [],
-        });
+        this.startNewInterviewSetup(target.dataset.question);
         return;
       }
       const session = this.state.screen === 'setup'
@@ -1612,12 +1661,18 @@ export class SystemDesignStudio {
       if (this.state.tool === 'connect' && this.canEdit()) this.createConnection(target.dataset.nodeId);
       else this.setState({ selectedId: target.dataset.nodeId, selectedEdgeId: null, inspectorTab: 'general' });
     }
+    if (action === 'startConnection' && this.canEdit()) {
+      this.setState({ tool: 'connect' });
+      this.createConnection(target.dataset.nodeId);
+    }
     if (action === 'selectEdge') this.setState({ selectedEdgeId: target.dataset.edgeId, selectedId: null });
     if (action === 'selectDiagnostic') this.setState({ selectedId: target.dataset.nodeId || null, selectedEdgeId: null, problemsOpen: true });
     if (action === 'tab') this.setState({ inspectorTab: target.dataset.tab });
     if (action === 'toggleProblems') this.setState({ problemsOpen: !this.state.problemsOpen });
     if (action === 'toggleAi' && this.canViewAiHints()) this.setState({ aiOpen: !this.state.aiOpen });
     if (action === 'tool') this.setState({ tool: target.dataset.tool });
+    if (action === 'zoomOut') this.setZoom((this.state.zoom || 1) - 0.25);
+    if (action === 'zoomIn') this.setZoom((this.state.zoom || 1) + 0.25);
     if (action === 'traffic' && this.canInjectFailures()) this.setState({ traffic: this.state.traffic ? 0 : Number(target.dataset.value || 1000), problemsOpen: true });
     if (action === 'resetSimulation' && this.canInjectFailures()) this.setState({ traffic: 0, broken: [], constraints: [], problemsOpen: false });
     if (action === 'injectScenario') this.injectScenario(target.dataset.scenario);
@@ -1766,10 +1821,12 @@ export class SystemDesignStudio {
     event.preventDefault();
     const payload = JSON.parse(event.dataTransfer.getData('application/json') || '{}');
     const rect = canvas.getBoundingClientRect();
-    this.addComponent(payload.name, payload.cat, event.clientX - rect.left - 75, event.clientY - rect.top - 33);
+    const point = this.canvasPoint(event.clientX, event.clientY, rect);
+    this.addComponent(payload.name, payload.cat, point.x - 75, point.y - 33);
   }
 
   handlePointerDown(event) {
+    if (event.target.closest('.node-connect')) return;
     const canvas = event.target.closest('[data-canvas]');
     if (this.state.tool === 'pan' && canvas) {
       this.drag = { kind: 'pan', x: event.clientX, y: event.clientY, ox: this.state.pan.x, oy: this.state.pan.y };
@@ -1793,7 +1850,8 @@ export class SystemDesignStudio {
       return;
     }
     if (this.drag.kind === 'node') {
-      this.state.comps = this.state.comps.map((component) => component.id === this.drag.id ? { ...component, x: Math.round(this.drag.ox + dx), y: Math.round(this.drag.oy + dy) } : component);
+      const zoom = this.state.zoom || 1;
+      this.state.comps = this.state.comps.map((component) => component.id === this.drag.id ? { ...component, x: Math.round(this.drag.ox + dx / zoom), y: Math.round(this.drag.oy + dy / zoom) } : component);
       this.render();
     }
   }
@@ -1809,7 +1867,16 @@ export class SystemDesignStudio {
     const canvas = event.target.closest('[data-canvas]');
     if (!canvas || event.target.closest('[data-node-id], [data-comment-id], .edge-label')) return;
     const rect = canvas.getBoundingClientRect();
-    this.addCanvasComment(event.clientX - rect.left - this.state.pan.x, event.clientY - rect.top - this.state.pan.y);
+    const point = this.canvasPoint(event.clientX, event.clientY, rect);
+    this.addCanvasComment(point.x, point.y);
+  }
+
+  canvasPoint(clientX, clientY, rect) {
+    const zoom = this.state.zoom || 1;
+    return {
+      x: (clientX - rect.left - this.state.pan.x) / zoom,
+      y: (clientY - rect.top - this.state.pan.y) / zoom,
+    };
   }
 
   addComponent(name, cat, x = 420, y = 180) {

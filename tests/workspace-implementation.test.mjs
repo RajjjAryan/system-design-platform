@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync('public/app.js', 'utf8');
+const styles = readFileSync('public/styles.css', 'utf8');
 
 const requiredImplementationMarkers = [
   'handleCanvasClick',
@@ -26,3 +27,5 @@ for (const marker of requiredImplementationMarkers) {
 }
 
 assert.doesNotMatch(source, /Saved locally|deployable static artifact|Evaluation submitted|No generated answers/);
+assert.match(styles, /\.left-panel,\s*\.right-panel\s*\{[\s\S]*display:\s*flex;[\s\S]*flex-direction:\s*column;/);
+assert.match(styles, /\.panel-scroll\s*\{[\s\S]*overflow-y:\s*auto;/);
