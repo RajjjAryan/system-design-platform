@@ -13,6 +13,5 @@ COPY server ./server
 RUN mkdir -p /app/.data
 
 EXPOSE 8787
-VOLUME ["/app/.data"]
 
 CMD ["npm", "start"]
