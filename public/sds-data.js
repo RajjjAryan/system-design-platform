@@ -451,5 +451,79 @@ export const QUESTION_SPEC = Object.fromEntries(
   QUESTIONS.map((question) => [question.id, QUESTION_DETAILS[question.id]]),
 );
 
+const IDEAL_COMPONENTS = {
+  twitter: ['Web Client', 'API Gateway', 'Service', 'Redis', 'Kafka', 'PostgreSQL', 'S3', 'Prometheus'],
+  whatsapp: ['Mobile App', 'API Gateway', 'Service', 'Kafka', 'Redis', 'DynamoDB', 'S3', 'Prometheus'],
+  uber: ['Mobile App', 'API Gateway', 'Load Balancer', 'Service', 'Redis', 'Kafka', 'PostgreSQL', 'Prometheus'],
+  netflix: ['Web Client', 'CDN', 'API Gateway', 'Service', 'Kafka', 'S3', 'PostgreSQL', 'Prometheus'],
+  tinyurl: ['Browser', 'CDN', 'API Gateway', 'Service', 'Redis', 'DynamoDB', 'PostgreSQL', 'Prometheus'],
+  gdocs: ['Web Client', 'API Gateway', 'Service', 'Kafka', 'Redis', 'PostgreSQL', 'S3', 'Prometheus'],
+  youtube: ['Web Client', 'CDN', 'API Gateway', 'Service', 'Kafka', 'S3', 'Elasticsearch', 'Prometheus'],
+  dropbox: ['Web Client', 'API Gateway', 'Service', 'Kafka', 'PostgreSQL', 'S3', 'Redis', 'Prometheus'],
+  instagram: ['Mobile App', 'CDN', 'API Gateway', 'Service', 'Redis', 'Kafka', 'PostgreSQL', 'S3'],
+  search: ['Browser', 'API Gateway', 'Service', 'Kafka', 'Elasticsearch', 'S3', 'Redis', 'Prometheus'],
+  notif: ['API Gateway', 'Service', 'Kafka', 'SQS', 'Redis', 'PostgreSQL', 'Worker', 'Prometheus'],
+  payment: ['API Gateway', 'Load Balancer', 'Service', 'Kafka', 'PostgreSQL', 'Redis', 'Worker', 'Prometheus'],
+  delivery: ['Mobile App', 'API Gateway', 'Load Balancer', 'Service', 'Kafka', 'Redis', 'PostgreSQL', 'Prometheus'],
+  matching: ['Mobile App', 'API Gateway', 'Service', 'Redis', 'Kafka', 'PostgreSQL', 'Worker', 'Prometheus'],
+};
+
+const ITEM_CATEGORY = (() => {
+  const categories = {};
+  for (const group of PALETTE) {
+    for (const item of group.items) {
+      if (!categories[item]) categories[item] = group.cat;
+    }
+  }
+  return categories;
+})();
+
+function idealEdgesFor(components) {
+  const edgePairs = [
+    [0, 1, 'HTTPS'],
+    [1, 2, 'gRPC'],
+    [2, 3, 'Redis'],
+    [2, 4, 'Kafka'],
+    [2, 5, 'SQL/TLS'],
+    [4, 6, 'Kafka'],
+    [2, 7, 'HTTP'],
+  ];
+  return edgePairs
+    .filter(([from, to]) => components[from] && components[to])
+    .map(([from, to, protocol]) => ({ from: components[from], to: components[to], protocol }));
+}
+
+function idealKeyPoints(question) {
+  const detail = QUESTION_DETAILS[question.id];
+  return [
+    ...(detail.nonFunctional || []).slice(0, 2),
+    ...(detail.scale || []).slice(0, 1),
+    ...(detail.followups || []).slice(0, 2),
+  ].slice(0, 5);
+}
+
+export const IDEAL_SOLUTIONS = Object.fromEntries(QUESTIONS.map((question) => {
+  const componentNames = IDEAL_COMPONENTS[question.id] || IDEAL_COMPONENTS.twitter;
+  return [question.id, {
+    title: `Ideal ${question.title.replace(/^Design\s+/, '')} architecture`,
+    summary: `Reference architecture for scoring ${question.title} without revealing it to the candidate.`,
+    components: componentNames.map((name) => ({
+      name,
+      category: ITEM_CATEGORY[name] || 'Compute',
+      purpose: name === 'Prometheus' ? 'Metrics, alerting, and interview observability evidence' : `${name} in the critical request path`,
+    })),
+    edges: idealEdgesFor(componentNames),
+    keyPoints: idealKeyPoints(question),
+    rubric: [
+      { dimension: 'Requirements coverage', weight: 20 },
+      { dimension: 'Scalability and bottlenecks', weight: 20 },
+      { dimension: 'Reliability and failure handling', weight: 20 },
+      { dimension: 'Data model and consistency', weight: 15 },
+      { dimension: 'Security and operability', weight: 15 },
+      { dimension: 'Communication and tradeoffs', weight: 10 },
+    ],
+  }];
+}));
+
 // downstream adjacency for failure propagation (who depends ON a broken node)
 export const PROTOCOLS = ['HTTP','gRPC','Kafka','Redis','TCP','Websocket'];

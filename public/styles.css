@@ -464,6 +464,30 @@ textarea:disabled {
   z-index: 4;
 }
 
+.question-panel-collapsed {
+  width: auto;
+  max-width: min(340px, calc(100% - 28px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-2);
+  text-align: left;
+}
+
+.question-panel-collapsed span {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-minimize {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  font-size: 14px;
+}
+
 .canvas-layer {
   position: absolute;
   inset: 0;
@@ -542,6 +566,22 @@ textarea:disabled {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   cursor: grab;
   user-select: none;
+}
+
+.node:active {
+  cursor: grabbing;
+}
+
+.node-rename {
+  width: 100%;
+  height: 24px;
+  border: 1px solid rgba(99, 102, 241, 0.52);
+  border-radius: 6px;
+  padding: 0 6px;
+  color: var(--text);
+  background: rgba(3, 7, 18, 0.72);
+  font-size: 12px;
+  outline: none;
 }
 
 .node-connect {
@@ -717,6 +757,12 @@ textarea:disabled {
 
 .bar.warn > span {
   background: var(--warn);
+}
+
+.missing-pill {
+  color: var(--bad-2);
+  border-color: rgba(239, 68, 68, 0.32);
+  background: rgba(239, 68, 68, 0.11);
 }
 
 .diag-panel {

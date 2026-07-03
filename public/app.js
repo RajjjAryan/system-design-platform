@@ -1,4 +1,4 @@
-import { ICONS, ITEM_ICON, PALETTE, QUESTION_SPEC, QUESTIONS } from './sds-data.js';
+import { ICONS, IDEAL_SOLUTIONS, ITEM_ICON, PALETTE, QUESTION_SPEC, QUESTIONS } from './sds-data.js';
 import {
   EDGE_PROTOCOLS,
   EDGE_SERIALIZERS,
@@ -313,6 +313,10 @@ export function createInitialState({ storage, location } = {}) {
     pan: { x: 0, y: 0 },
     connectionStartId: null,
     paletteQuery: '',
+    questionCollapsed: false,
+    idealOpen: false,
+    renamingId: null,
+    renameDraft: '',
     comments: activeSession?.architecture?.comments || [],
     saveState: activeSession ? 'saved' : 'idle',
     reviewFeedback: activeSession?.review?.feedback || '',
@@ -371,6 +375,9 @@ export class SystemDesignStudio {
     });
     this.root.addEventListener('drop', (event) => this.handleDrop(event));
     this.root.addEventListener('pointerdown', (event) => this.handlePointerDown(event));
+    this.root.addEventListener('dblclick', (event) => this.handleDoubleClick(event));
+    this.root.addEventListener('wheel', (event) => this.handleWheel(event), { passive: false });
+    window.addEventListener('keydown', (event) => this.handleKeyDown(event));
     window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
     window.addEventListener('pointerup', () => { void this.handlePointerUp(); });
     this.render();
@@ -583,6 +590,7 @@ export class SystemDesignStudio {
       feedback: this.state.reviewFeedback.trim(),
       submittedAt: new Date().toISOString(),
       submittedBy: this.state.currentUser?.email || this.activeRole(),
+      idealAssessment: this.compareToIdealSolution(),
     };
     this.setState({ reviewDecision: decision, saveState: 'saving' });
     try {
@@ -673,6 +681,10 @@ export class SystemDesignStudio {
       pan: { x: 0, y: 0 },
       zoom: 1,
       connectionStartId: null,
+      questionCollapsed: false,
+      idealOpen: false,
+      renamingId: null,
+      renameDraft: '',
       saveState: 'idle',
     });
   }
@@ -701,6 +713,10 @@ export class SystemDesignStudio {
       broken: [],
       traffic: 0,
       zoom: 1,
+      questionCollapsed: false,
+      idealOpen: false,
+      renamingId: null,
+      renameDraft: '',
       constraints: [],
       problemsOpen: false,
       aiOpen: false,
@@ -1175,7 +1191,9 @@ export class SystemDesignStudio {
         <div class="workspace-main">
           ${this.renderPalette()}
           ${this.renderCanvas()}
-          ${this.state.aiOpen && this.canViewAiHints() ? this.renderAiPanel() : this.renderRightPanel()}
+          ${this.state.idealOpen && this.canSubmitReview() ? this.renderIdealSolutionPanel()
+            : this.state.aiOpen && this.canViewAiHints() ? this.renderAiPanel()
+              : this.renderRightPanel()}
         </div>
         ${this.renderStatusbar()}
       </div>`;
@@ -1211,6 +1229,7 @@ export class SystemDesignStudio {
           ` : ''}
           <div class="spacer"></div>
           ${this.canViewAiHints() ? '<button class="btn" data-action="toggleAi">AI hints</button>' : ''}
+          ${this.canSubmitReview() ? `<button class="btn ${this.state.idealOpen ? 'active' : ''}" data-action="toggleIdealSolution">Ideal solution</button>` : ''}
           ${this.visibility().canSeeScorecard ? '<button class="btn primary" data-action="review">Finish & review</button>' : ''}`
         : `
           <div class="spacer"></div>
@@ -1233,7 +1252,7 @@ export class SystemDesignStudio {
           </div>
         </aside>`;
     }
-    const query = this.state.paletteQuery.trim().toLowerCase();
+    const terms = this.state.paletteQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return `
       <aside class="left-panel">
         <div class="panel-head">
@@ -1242,13 +1261,16 @@ export class SystemDesignStudio {
         </div>
         <div class="panel-scroll">
           ${PALETTE.map((group) => {
-            const items = group.items.filter((item) => !query || item.toLowerCase().includes(query) || group.cat.toLowerCase().includes(query));
+            const items = group.items.filter((item) => {
+              const haystack = `${item} ${group.cat}`.toLowerCase();
+              return !terms.length || terms.every((term) => haystack.includes(term));
+            });
             if (!items.length) return '';
             return `
             <div class="palette-group">
               <div class="mono-label" style="color:${group.color};margin:0 0 7px 6px">${esc(group.cat)}</div>
               ${items.map((item) => `
-                <button class="palette-item" draggable="true" data-palette-name="${esc(item)}" data-palette-cat="${esc(group.cat)}" data-action="addComponent">
+                <button class="palette-item" draggable="true" title="Drag to canvas or click to add" data-palette-name="${esc(item)}" data-palette-cat="${esc(group.cat)}" data-action="addComponent">
                   <span class="icon-tile" style="color:${group.color};background:${group.color}22">${this.iconForName(item, 16)}</span>
                   <span>${esc(item)}</span>
                 </button>`).join('')}
@@ -1267,19 +1289,28 @@ export class SystemDesignStudio {
     const custom = this.isCustomActiveSession();
     const title = active?.title || (QUESTIONS.find((q) => q.id === this.state.question) || QUESTIONS[0]).title;
     const difficulty = active?.difficulty || questionById(this.state.question).diff;
-    return `
-      <section class="canvas-wrap" data-canvas>
+    const questionPanel = this.state.questionCollapsed ? `
+        <button class="question-panel question-panel-collapsed card" data-action="toggleQuestionPanel" title="Show question">
+          <span>${esc(title)}</span>
+          <strong>Show question</strong>
+        </button>` : `
         <div class="question-panel card">
           <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
             <strong>${esc(title)}</strong>
-            <span class="pill" style="color:var(--bad-2)">${esc(difficulty)}</span>
+            <span style="display:flex;align-items:center;gap:6px">
+              <span class="pill" style="color:var(--bad-2)">${esc(difficulty)}</span>
+              <button class="btn icon-btn question-minimize" data-action="toggleQuestionPanel" title="Minimize question">-</button>
+            </span>
           </div>
           ${this.visibility().canSeeQuestion ? `
             <p class="subtle" style="font-size:12.5px;line-height:1.45">${esc(active?.prompt || spec.statement || 'Design the system and explain tradeoffs.')}</p>
             ${custom ? '<div class="mono-label">Custom prompt</div>' : `<div class="mono-label">Requirements</div>
             ${(spec.functional || []).slice(0, 4).map((item) => `<div style="font-size:12px;margin-top:6px;color:var(--text-2)">+ ${esc(item)}</div>`).join('')}`}`
           : '<p class="subtle" style="font-size:12.5px;line-height:1.45">Question details are hidden for this role.</p>'}
-        </div>
+        </div>`;
+    return `
+      <section class="canvas-wrap" data-canvas>
+        ${questionPanel}
         ${this.state.connectionStartId ? '<div class="connection-hint">Choose a target component to create the connection</div>' : ''}
         <div class="canvas-layer" style="transform:translate(${this.state.pan.x}px, ${this.state.pan.y}px) scale(${this.state.zoom || 1})">
           <svg class="edges">${this.state.edges.map((edge) => this.renderEdgePath(edge, byId)).join('')}</svg>
@@ -1303,15 +1334,21 @@ export class SystemDesignStudio {
       !isBroken && affected.has(component.id) ? 'affected' : '',
       !isBroken && this.state.traffic ? 'overloaded' : '',
     ].filter(Boolean).join(' ');
+    const isRenaming = this.state.renamingId === component.id;
     return `
       <div class="${className}" data-node-id="${esc(component.id)}" data-action="selectNode" style="left:${component.x}px;top:${component.y}px">
         ${this.canEdit() ? `<button class="node-connect" data-action="startConnection" data-node-id="${esc(component.id)}" title="Connect this component">+</button>` : ''}
         ${severity ? `<span class="diag-dot ${severity}">${nodeDiagnostics.length}</span>` : ''}
         <span class="icon-tile" style="color:${color};background:${color}22">${this.iconForName(component.base || component.type, 18)}</span>
-        <span style="min-width:0">
-          <strong style="font-size:13px">${esc(component.type)}</strong><br>
-          <span class="subtle" style="font-size:11px">${esc(component.cat)}</span>
-        </span>
+        ${isRenaming ? `
+          <span style="min-width:0;flex:1">
+            <input class="node-rename" data-rename-input data-node-id="${esc(component.id)}" value="${esc(this.state.renameDraft || component.type)}" aria-label="Rename component" autofocus>
+            <span class="subtle" style="font-size:11px">${esc(component.cat)}</span>
+          </span>` : `
+          <span style="min-width:0">
+            <strong style="font-size:13px">${esc(component.type)}</strong><br>
+            <span class="subtle" style="font-size:11px">${esc(component.cat)}</span>
+          </span>`}
       </div>`;
   }
 
@@ -1348,6 +1385,7 @@ export class SystemDesignStudio {
   }
 
   renderRightPanel() {
+    if (this.state.idealOpen && this.canSubmitReview()) return this.renderIdealSolutionPanel();
     const selected = this.selectedComponent();
     const edge = this.selectedEdge();
     if (selected) return this.renderInspector(selected);
@@ -1399,6 +1437,72 @@ export class SystemDesignStudio {
           </div>
           <div style="margin-top:16px">${health.dims.map((dim) => this.metricRow(dim.name, dim.value.toFixed(1), `${Math.round(dim.value / 5 * 100)}%`, dim.value < 3)).join('')}</div>
           <button class="btn" style="width:100%;margin-top:10px" data-action="toggleProblems">Open diagnostics (${this.diagnostics().length})</button>
+        </div>
+      </aside>`;
+  }
+
+  idealSolution() {
+    return IDEAL_SOLUTIONS[this.state.question] || IDEAL_SOLUTIONS.twitter;
+  }
+
+  compareToIdealSolution() {
+    const ideal = this.idealSolution();
+    const idealNames = (ideal.components || []).map((component) => component.name || component);
+    const normalize = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const currentNames = this.state.comps.map((component) => normalize(component.type));
+    const matched = idealNames.filter((name) => {
+      const idealName = normalize(name);
+      return currentNames.some((current) => current.includes(idealName) || idealName.includes(current));
+    });
+    const diagnostics = this.diagnostics();
+    const criticals = diagnostics.filter((item) => item.sev === 'critical').length;
+    const coverage = idealNames.length ? Math.round((matched.length / idealNames.length) * 100) : 0;
+    const suggestedScore = Math.round(clamp(1 + (coverage / 100) * 3.2 - criticals * 0.35, 1, 5) * 10) / 10;
+    return {
+      coverage,
+      matched,
+      missing: idealNames.filter((name) => !matched.includes(name)),
+      diagnostics: diagnostics.length,
+      criticals,
+      suggestedScore,
+    };
+  }
+
+  renderIdealSolutionPanel() {
+    const ideal = this.idealSolution();
+    const assessment = this.compareToIdealSolution();
+    return `
+      <aside class="right-panel ideal-panel">
+        <div class="panel-head">
+          <div class="section-title">Ideal solution</div>
+          <div class="subtle" style="font-size:12px">${esc(ideal.summary)}</div>
+          <button class="btn" style="width:100%;margin-top:12px" data-action="toggleIdealSolution">Back to candidate canvas</button>
+        </div>
+        <div class="panel-scroll">
+          <div class="card stat" style="text-align:center;margin-bottom:12px">
+            <div class="stat-value">${assessment.coverage}%</div>
+            <div class="subtle">candidate coverage vs reference</div>
+          </div>
+          <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
+            <div class="card stat"><div class="subtle">Suggested score</div><strong>${assessment.suggestedScore.toFixed(1)} / 5</strong></div>
+            <div class="card stat"><div class="subtle">Critical gaps</div><strong>${assessment.criticals}</strong></div>
+          </div>
+          <div class="card stat" style="margin-bottom:12px">
+            <div class="mono-label">Reference components</div>
+            <div class="pill-row" style="margin-top:10px">${(ideal.components || []).map((component) => `<span class="pill ${assessment.missing.includes(component.name) ? 'missing-pill' : ''}">${esc(component.name)}</span>`).join('')}</div>
+          </div>
+          <div class="card stat" style="margin-bottom:12px">
+            <div class="mono-label">Reference flows</div>
+            ${(ideal.edges || []).map((edge) => `<div class="visibility-row"><span>${esc(edge.from)} -> ${esc(edge.to)}</span><strong>${esc(edge.protocol)}</strong></div>`).join('')}
+          </div>
+          <div class="card stat" style="margin-bottom:12px">
+            <div class="mono-label">Scoring evidence</div>
+            ${(ideal.keyPoints || []).map((point) => `<div style="font-size:12.5px;margin-top:7px;color:var(--text-2)">+ ${esc(point)}</div>`).join('')}
+          </div>
+          <div class="card stat">
+            <div class="mono-label">Rubric</div>
+            ${(ideal.rubric || []).map((item) => `<div class="visibility-row"><span>${esc(item.dimension)}</span><strong>${item.weight}%</strong></div>`).join('')}
+          </div>
         </div>
       </aside>`;
   }
@@ -1464,7 +1568,11 @@ export class SystemDesignStudio {
     const disabled = this.canEdit() ? '' : 'disabled';
     return `
       <aside class="right-panel">
-        <div class="panel-head"><div class="section-title">Connection</div><div class="subtle">${esc(edge.id)}</div></div>
+        <div class="panel-head">
+          <div class="section-title">Connection</div>
+          <div class="subtle">${esc(edge.id)}</div>
+          <button class="btn danger" style="width:100%;margin-top:12px" data-action="deleteSelected" ${this.canEdit() ? '' : 'disabled'}>Delete connection</button>
+        </div>
         <div class="panel-scroll">
           <label><span class="mono-label">Protocol</span><select class="select" data-edge-field="protocol" ${disabled}>${EDGE_PROTOCOLS.map((item) => `<option ${item === edge.protocol ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
           <label style="display:block;margin-top:12px"><span class="mono-label">Serializer</span><select class="select" data-edge-field="serializer" ${disabled}>${EDGE_SERIALIZERS.map((item) => `<option ${item === (edge.serializer || 'JSON') ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
@@ -1550,6 +1658,8 @@ export class SystemDesignStudio {
     const scoreKeys = Object.keys(this.state.scores);
     const avg = scoreKeys.reduce((sum, key) => sum + this.state.scores[key], 0) / scoreKeys.length;
     const canSeeScorecard = Boolean(this.visibility().canSeeScorecard);
+    const ideal = this.idealSolution();
+    const idealAssessment = this.compareToIdealSolution();
     return `
       <div class="app dashboard">
         ${this.renderTopbar('review')}
@@ -1563,6 +1673,12 @@ export class SystemDesignStudio {
             <div class="pill-row" style="margin:10px 0 24px">${this.state.comps.map((component) => `<span class="pill">${esc(component.type)}</span>`).join('')}</div>
             <div class="mono-label">Generated observations</div>
             ${this.diagnostics().slice(0, 6).map((item) => `<div class="diag-item" style="border-left-color:${item.sev === 'critical' ? 'var(--bad)' : 'var(--warn)'}"><strong>${esc(item.title)}</strong><div class="subtle" style="font-size:12px;margin-top:4px">${esc(item.impact)}</div></div>`).join('')}
+            <div class="section-head"><div><div class="section-title">Ideal solution comparison</div><div class="subtle">${esc(ideal.title)}</div></div><span class="pill">${idealAssessment.coverage}% match</span></div>
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:18px">
+              <div class="card stat"><div class="subtle">Suggested score</div><div class="stat-value">${idealAssessment.suggestedScore.toFixed(1)}</div></div>
+              <div class="card stat"><div class="subtle">Missing reference components</div><strong>${idealAssessment.missing.slice(0, 4).join(', ') || 'None'}</strong></div>
+              <div class="card stat"><div class="subtle">Critical diagnostics</div><strong>${idealAssessment.criticals}</strong></div>
+            </div>
           </main>
           <aside class="review-side">
             ${canSeeScorecard ? `
@@ -1670,6 +1786,8 @@ export class SystemDesignStudio {
     if (action === 'tab') this.setState({ inspectorTab: target.dataset.tab });
     if (action === 'toggleProblems') this.setState({ problemsOpen: !this.state.problemsOpen });
     if (action === 'toggleAi' && this.canViewAiHints()) this.setState({ aiOpen: !this.state.aiOpen });
+    if (action === 'toggleIdealSolution' && this.canSubmitReview()) this.toggleIdealSolution();
+    if (action === 'toggleQuestionPanel') this.toggleQuestionPanel();
     if (action === 'tool') this.setState({ tool: target.dataset.tool });
     if (action === 'zoomOut') this.setZoom((this.state.zoom || 1) - 0.25);
     if (action === 'zoomIn') this.setZoom((this.state.zoom || 1) + 0.25);
@@ -1742,10 +1860,73 @@ export class SystemDesignStudio {
     }
   }
 
+  restorePaletteSearchFocus(cursor) {
+    const input = this.root.querySelector?.('[data-palette-search]');
+    if (!input) return;
+    input.focus?.();
+    if (typeof input.setSelectionRange === 'function') {
+      const position = Math.max(0, Math.min(Number(cursor) || 0, this.state.paletteQuery.length));
+      input.setSelectionRange(position, position);
+    }
+  }
+
+  handleKeyDown(event) {
+    const renameInput = event.target?.closest?.('[data-rename-input]');
+    if (renameInput) {
+      if (event.key === 'Enter') {
+        event.preventDefault?.();
+        this.commitRename(renameInput.value);
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault?.();
+        this.cancelRename();
+      }
+      return;
+    }
+
+    const editable = event.target?.closest?.('input, textarea, select, [contenteditable="true"]');
+    if (editable) return;
+
+    if (event.key === 'Escape' && this.state.connectionStartId) {
+      event.preventDefault?.();
+      this.setState({ connectionStartId: null, tool: 'select' });
+      return;
+    }
+
+    if ((event.key === 'Delete' || event.key === 'Backspace') && (this.state.selectedId || this.state.selectedEdgeId)) {
+      event.preventDefault?.();
+      this.deleteSelected();
+    }
+  }
+
+  handleDoubleClick(event) {
+    if (!this.canEdit()) return;
+    const node = event.target.closest('[data-node-id]');
+    if (!node || event.target.closest('button, input, textarea, select')) return;
+    this.beginRename(node.dataset.nodeId);
+  }
+
+  handleWheel(event) {
+    const canvas = event.target.closest('[data-canvas]');
+    const panel = event.target.closest('.left-panel, .right-panel, .question-panel, .diag-panel, .canvas-comment');
+    if (!canvas || panel) return;
+    event.preventDefault();
+    const step = event.deltaY < 0 ? 0.1 : -0.1;
+    this.setZoom((this.state.zoom || 1) + step);
+  }
+
   handleInput(event) {
     const paletteSearch = event.target.closest('[data-palette-search]');
     if (paletteSearch) {
-      this.setState({ paletteQuery: paletteSearch.value });
+      const cursor = paletteSearch.selectionStart ?? paletteSearch.value.length;
+      this.state.paletteQuery = paletteSearch.value;
+      this.render();
+      this.restorePaletteSearchFocus(cursor);
+      return;
+    }
+    const rename = event.target.closest('[data-rename-input]');
+    if (rename) {
+      this.state.renameDraft = rename.value;
       return;
     }
     const login = event.target.closest('[data-login-field]');
@@ -1771,6 +1952,11 @@ export class SystemDesignStudio {
   }
 
   handleChange(event) {
+    const rename = event.target.closest('[data-rename-input]');
+    if (rename) {
+      this.commitRename(rename.value);
+      return;
+    }
     const permission = event.target.closest('[data-permission]');
     if (permission) {
       const permissions = { ...this.state.draft.permissions, [permission.dataset.permission]: permission.checked };
@@ -1807,6 +1993,53 @@ export class SystemDesignStudio {
     }
   }
 
+  beginRename(nodeId) {
+    if (!nodeId || !this.canEdit()) return;
+    const component = this.state.comps.find((item) => item.id === nodeId);
+    if (!component) return;
+    this.setState({
+      selectedId: nodeId,
+      selectedEdgeId: null,
+      renamingId: nodeId,
+      renameDraft: component.type,
+    });
+  }
+
+  commitRename(value) {
+    if (!this.state.renamingId || !this.canEdit()) return;
+    const nextName = String(value || '').trim();
+    if (!nextName) {
+      this.cancelRename();
+      return;
+    }
+    const id = this.state.renamingId;
+    this.setState({
+      comps: this.state.comps.map((component) => component.id === id ? { ...component, type: nextName } : component),
+      selectedId: id,
+      selectedEdgeId: null,
+      renamingId: null,
+      renameDraft: '',
+    });
+    void this.persistArchitecture();
+  }
+
+  cancelRename() {
+    this.setState({ renamingId: null, renameDraft: '' });
+  }
+
+  toggleQuestionPanel() {
+    this.setState({ questionCollapsed: !this.state.questionCollapsed });
+  }
+
+  toggleIdealSolution() {
+    this.setState({
+      idealOpen: !this.state.idealOpen,
+      aiOpen: false,
+      selectedId: null,
+      selectedEdgeId: null,
+    });
+  }
+
   handleDragStart(event) {
     if (!this.canEdit()) return;
     const item = event.target.closest('[data-palette-name]');
@@ -1826,9 +2059,11 @@ export class SystemDesignStudio {
   }
 
   handlePointerDown(event) {
-    if (event.target.closest('.node-connect')) return;
+    if (event.button && event.button !== 0) return;
+    if (event.target.closest('.node-connect, [data-rename-input], button, input, textarea, select')) return;
     const canvas = event.target.closest('[data-canvas]');
     if (this.state.tool === 'pan' && canvas) {
+      event.preventDefault?.();
       this.drag = { kind: 'pan', x: event.clientX, y: event.clientY, ox: this.state.pan.x, oy: this.state.pan.y };
       return;
     }
@@ -1837,6 +2072,7 @@ export class SystemDesignStudio {
     if (!node) return;
     const component = this.state.comps.find((item) => item.id === node.dataset.nodeId);
     if (!component) return;
+    event.preventDefault?.();
     this.drag = { kind: 'node', id: component.id, x: event.clientX, y: event.clientY, ox: component.x, oy: component.y };
   }
 
@@ -1879,11 +2115,20 @@ export class SystemDesignStudio {
     };
   }
 
-  addComponent(name, cat, x = 420, y = 180) {
+  nextComponentPosition() {
+    const index = this.state.comps.length;
+    return {
+      x: 320 + (index % 3) * 190,
+      y: 160 + Math.floor(index / 3) * 96,
+    };
+  }
+
+  addComponent(name, cat, x = null, y = null) {
     if (!name || !cat || !this.canEdit()) return;
     const id = `c${Date.now()}`;
+    const position = x === null || y === null ? this.nextComponentPosition() : { x, y };
     this.setState({
-      comps: [...this.state.comps, { id, type: name, cat, x: Math.round(x), y: Math.round(y), w: 150, props: {} }],
+      comps: [...this.state.comps, { id, type: name, cat, x: Math.round(position.x), y: Math.round(position.y), w: 150, props: {} }],
       selectedId: id,
       selectedEdgeId: null,
     });

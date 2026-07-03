@@ -10,6 +10,15 @@ function root() {
   return { innerHTML: '', addEventListener() {} };
 }
 
+function eventTargetWithClosest(matches = {}) {
+  return {
+    tagName: 'DIV',
+    closest(selector) {
+      return matches[selector] || null;
+    },
+  };
+}
+
 function storage() {
   const data = new Map();
   return {
@@ -304,4 +313,217 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
 
   assert.equal(app.state.comps.length, 1);
   assert.equal(app.state.comps[0].type, 'API Service');
+}
+
+{
+  const persisted = [];
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      async updateInterview(id, body) {
+        persisted.push({ id, body });
+        return { interview: app.activeSession() };
+      },
+    },
+  });
+  const session = createSessionFromDraft({ user: owner, draft: createDefaultDraft(owner, 'payment'), questionId: 'payment' });
+  app.state.sessions = [session];
+  app.state.activeSessionId = session.id;
+  app.state.screen = 'workspace';
+  app.state.comps = [
+    { id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 },
+    { id: 'db', type: 'PostgreSQL', cat: 'Storage', x: 340, y: 120 },
+  ];
+  app.state.edges = [{ id: 'edge-1', from: 'api', to: 'db', protocol: 'SQL/TLS' }];
+  app.state.selectedEdgeId = 'edge-1';
+
+  let prevented = false;
+  app.handleKeyDown({
+    key: 'Delete',
+    target: eventTargetWithClosest(),
+    preventDefault() {
+      prevented = true;
+    },
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(app.state.edges.length, 0);
+  assert.equal(app.state.selectedEdgeId, null);
+  assert.equal(persisted.length, 1);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [
+    { id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 },
+    { id: 'db', type: 'PostgreSQL', cat: 'Storage', x: 340, y: 120 },
+  ];
+  app.state.edges = [{ id: 'edge-1', from: 'api', to: 'db', protocol: 'SQL/TLS' }];
+  app.state.selectedId = 'api';
+
+  app.handleKeyDown({
+    key: 'Backspace',
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.comps.some((component) => component.id === 'api'), false);
+  assert.equal(app.state.edges.length, 0);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [{ id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 }];
+
+  app.beginRename('api');
+  assert.equal(app.renderNode(app.state.comps[0], [], new Set()).includes('data-rename-input'), true);
+
+  app.handleInput({
+    target: {
+      value: 'Ingress API',
+      closest(selector) {
+        return selector === '[data-rename-input]' ? this : null;
+      },
+    },
+  });
+  app.handleKeyDown({
+    key: 'Enter',
+    target: eventTargetWithClosest({ '[data-rename-input]': { value: 'Ingress API' } }),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.comps[0].type, 'Ingress API');
+  assert.equal(app.state.renamingId, null);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.question = 'payment';
+
+  const expanded = app.renderCanvas();
+  assert.equal(expanded.includes('data-action="toggleQuestionPanel"'), true);
+  assert.equal(expanded.includes('creates payment intents'), true);
+
+  app.toggleQuestionPanel();
+  const collapsed = app.renderCanvas();
+  assert.equal(collapsed.includes('Show question'), true);
+  assert.equal(collapsed.includes('creates payment intents'), false);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.zoom = 1;
+
+  let prevented = false;
+  app.handleWheel({
+    deltaY: -120,
+    target: eventTargetWithClosest({ '[data-canvas]': true }),
+    preventDefault() {
+      prevented = true;
+    },
+  });
+
+  assert.equal(prevented, true);
+  assert.ok(app.state.zoom > 1);
+}
+
+{
+  const fakeSearch = {
+    focused: false,
+    selection: null,
+    focus() {
+      this.focused = true;
+    },
+    setSelectionRange(start, end) {
+      this.selection = [start, end];
+    },
+  };
+  const searchRoot = {
+    innerHTML: '',
+    addEventListener() {},
+    querySelector(selector) {
+      return selector === '[data-palette-search]' ? fakeSearch : null;
+    },
+  };
+  const app = new SystemDesignStudio(searchRoot, {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  const eventSearch = {
+    value: 'api gateway',
+    selectionStart: 11,
+    closest(selector) {
+      return selector === '[data-palette-search]' ? this : null;
+    },
+  };
+
+  app.handleInput({ target: eventSearch });
+
+  assert.equal(app.state.paletteQuery, 'api gateway');
+  assert.equal(fakeSearch.focused, true);
+  assert.deepEqual(fakeSearch.selection, [11, 11]);
+  assert.equal(app.renderPalette().includes('API Gateway'), true);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.selectedEdgeId = 'edge-1';
+  app.state.edges = [{ id: 'edge-1', from: 'api', to: 'db', protocol: 'SQL/TLS' }];
+
+  const inspector = app.renderEdgeInspector(app.state.edges[0]);
+
+  assert.equal(inspector.includes('data-action="deleteSelected"'), true);
+  assert.equal(inspector.includes('Delete connection'), true);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.role = 'interviewer';
+  app.state.question = 'twitter';
+  app.state.comps = [
+    { id: 'client', type: 'Web Client', cat: 'Frontend', x: 80, y: 120 },
+    { id: 'api', type: 'API Gateway', cat: 'API', x: 280, y: 120 },
+    { id: 'cache', type: 'Redis', cat: 'Storage', x: 480, y: 120 },
+  ];
+
+  assert.equal(app.renderTopbar('workspace').includes('data-action="toggleIdealSolution"'), true);
+  app.toggleIdealSolution();
+  assert.equal(app.state.idealOpen, true);
+  const panel = app.renderRightPanel();
+  assert.equal(panel.includes('Ideal solution'), true);
+  assert.equal(panel.includes('Suggested score'), true);
+  assert.equal(app.compareToIdealSolution().coverage > 0, true);
 }
