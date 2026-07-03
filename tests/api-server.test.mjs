@@ -5,13 +5,14 @@ import { join } from 'node:path';
 
 import { createApiServer } from '../server/api-server.mjs';
 
-async function startServer() {
+async function startServer(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'sds-api-'));
   const dbPath = join(dir, 'test.sqlite');
   const server = createApiServer({
     dbPath,
     publicOrigin: 'https://rajjjaryan.github.io/system-design-platform/',
     tokenSecret: 'test-secret',
+    ...options,
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -35,11 +36,38 @@ async function request(baseUrl, method, path, body, token) {
   return { response, json };
 }
 
+async function rawRequest(baseUrl, method, path, body, token) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body,
+  });
+  const text = await response.text();
+  const json = text ? JSON.parse(text) : null;
+  return { response, json };
+}
+
 const app = await startServer();
 
 try {
   const anonymous = await request(app.baseUrl, 'GET', '/api/interviews');
   assert.equal(anonymous.response.status, 401);
+
+  const invalidJson = await rawRequest(app.baseUrl, 'POST', '/api/auth/login', '{"email":');
+  assert.equal(invalidJson.response.status, 400);
+  assert.equal(invalidJson.json.error, 'Invalid JSON body');
+
+  const invalidEmail = await request(app.baseUrl, 'POST', '/api/auth/signup', {
+    name: 'Invalid Email',
+    email: 'not-an-email',
+    password: 'correct horse battery staple',
+  });
+  assert.equal(invalidEmail.response.status, 400);
+  assert.equal(invalidEmail.json.error, 'Email address is invalid');
+  assert.deepEqual(invalidEmail.json.details.email, ['Use a valid email address']);
 
   const weakPassword = await request(app.baseUrl, 'POST', '/api/auth/signup', {
     name: 'Weak Password',
@@ -108,6 +136,46 @@ try {
   const others = await request(app.baseUrl, 'GET', '/api/interviews', null, otherSignup.json.token);
   assert.equal(others.response.status, 200);
   assert.equal(others.json.interviews.length, 0);
+
+  const logoutUser = await request(app.baseUrl, 'POST', '/api/auth/signup', {
+    name: 'Logout User',
+    email: 'logout@example.com',
+    password: 'correct horse battery staple',
+  });
+  assert.equal(logoutUser.response.status, 201);
+  const logout = await request(app.baseUrl, 'POST', '/api/auth/logout', null, logoutUser.json.token);
+  assert.equal(logout.response.status, 200);
+  assert.equal(logout.json.revoked, true);
+  const afterLogout = await request(app.baseUrl, 'GET', '/api/me', null, logoutUser.json.token);
+  assert.equal(afterLogout.response.status, 401);
 } finally {
   await app.close();
+}
+
+const limited = await startServer({
+  rateLimits: {
+    auth: { limit: 2, windowMs: 60_000 },
+  },
+});
+
+try {
+  const first = await request(limited.baseUrl, 'POST', '/api/auth/login', {
+    email: 'missing@example.com',
+    password: 'wrong-password',
+  });
+  const second = await request(limited.baseUrl, 'POST', '/api/auth/login', {
+    email: 'missing@example.com',
+    password: 'wrong-password',
+  });
+  const third = await request(limited.baseUrl, 'POST', '/api/auth/login', {
+    email: 'missing@example.com',
+    password: 'wrong-password',
+  });
+
+  assert.equal(first.response.status, 401);
+  assert.equal(second.response.status, 401);
+  assert.equal(third.response.status, 429);
+  assert.equal(third.json.error, 'Too many requests. Try again shortly.');
+} finally {
+  await limited.close();
 }

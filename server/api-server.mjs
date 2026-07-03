@@ -19,6 +19,15 @@ const DEFAULT_PERMISSIONS = {
   panelCanViewReview: true,
 };
 
+const DEFAULT_SHARE_TTL_HOURS = 24 * 14;
+const MAX_BODY_BYTES = 512 * 1024;
+const MAX_ARCHITECTURE_BYTES = 256 * 1024;
+const DEFAULT_RATE_LIMITS = {
+  auth: { limit: 40, windowMs: 60_000 },
+  share: { limit: 240, windowMs: 60_000 },
+};
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -57,6 +66,25 @@ function requiredString(value, name, min = 1) {
     throw error;
   }
   return out;
+}
+
+function clientError(status, message, details = null) {
+  const error = new Error(message);
+  error.status = status;
+  if (details) error.details = details;
+  throw error;
+}
+
+function requiredEmail(value, name = 'email', { optional = false } = {}) {
+  const email = normalizeEmail(value);
+  if (!email) {
+    if (optional) return '';
+    clientError(400, `${name} is required`);
+  }
+  if (!EMAIL_PATTERN.test(email)) {
+    clientError(400, 'Email address is invalid', { [name]: ['Use a valid email address'] });
+  }
+  return email;
 }
 
 function passwordValidationIssues(value) {
@@ -208,13 +236,32 @@ function initDb(dbPath) {
       role TEXT NOT NULL,
       created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       created_at TEXT NOT NULL,
-      expires_at TEXT
+      expires_at TEXT,
+      revoked_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_share_tokens_interview ON share_tokens(interview_id);
+    CREATE TABLE IF NOT EXISTS interview_events (
+      id TEXT PRIMARY KEY,
+      interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      actor_role TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_interview_events_interview ON interview_events(interview_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+      token_hash TEXT PRIMARY KEY,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT NOT NULL
+    );
   `);
   const interviewColumns = new Set(db.prepare('PRAGMA table_info(interviews)').all().map((column) => column.name));
   if (!interviewColumns.has('review_json')) {
     db.exec("ALTER TABLE interviews ADD COLUMN review_json TEXT NOT NULL DEFAULT '{}'");
+  }
+  const shareColumns = new Set(db.prepare('PRAGMA table_info(share_tokens)').all().map((column) => column.name));
+  if (!shareColumns.has('revoked_at')) {
+    db.exec('ALTER TABLE share_tokens ADD COLUMN revoked_at TEXT');
   }
   return db;
 }
@@ -225,9 +272,120 @@ function id(prefix) {
 
 async function readBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) clientError(413, 'Request body is too large');
+    chunks.push(chunk);
+  }
   if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    clientError(400, 'Invalid JSON body');
+  }
+}
+
+function assertObject(value, message) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    clientError(400, message);
+  }
+}
+
+function requiredPayloadString(value, label, max = 160) {
+  const out = String(value || '').trim();
+  if (!out) clientError(400, 'Architecture payload is invalid', { architecture: [`${label} is required`] });
+  if (out.length > max) clientError(400, 'Architecture payload is invalid', { architecture: [`${label} is too long`] });
+  return out;
+}
+
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value ?? fallback);
+  if (!Number.isFinite(number)) clientError(400, 'Architecture payload is invalid', { architecture: ['Coordinates must be finite numbers'] });
+  return number;
+}
+
+function validateArchitecturePayload(value) {
+  assertObject(value, 'Architecture payload is invalid');
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_ARCHITECTURE_BYTES) {
+    clientError(413, 'Architecture payload is too large');
+  }
+  if (!Array.isArray(value.comps) || !Array.isArray(value.edges)) {
+    clientError(400, 'Architecture payload is invalid', { architecture: ['Components and edges must be arrays'] });
+  }
+  const comments = Array.isArray(value.comments) ? value.comments : [];
+  if (value.comps.length > 250 || value.edges.length > 500 || comments.length > 250) {
+    clientError(400, 'Architecture payload is invalid', { architecture: ['Canvas item count exceeds the launch limit'] });
+  }
+  return {
+    comps: value.comps.map((component) => {
+      assertObject(component, 'Architecture payload is invalid');
+      return {
+        ...component,
+        id: requiredPayloadString(component.id, 'Component id'),
+        type: requiredPayloadString(component.type, 'Component type'),
+        cat: requiredPayloadString(component.cat, 'Component category'),
+        x: finiteNumber(component.x),
+        y: finiteNumber(component.y),
+        ...(component.w === undefined ? {} : { w: finiteNumber(component.w, 150) }),
+        props: component.props && typeof component.props === 'object' && !Array.isArray(component.props) ? component.props : {},
+      };
+    }),
+    edges: value.edges.map((edge) => {
+      assertObject(edge, 'Architecture payload is invalid');
+      return {
+        ...edge,
+        id: requiredPayloadString(edge.id, 'Edge id'),
+        from: requiredPayloadString(edge.from, 'Edge source'),
+        to: requiredPayloadString(edge.to, 'Edge target'),
+        protocol: String(edge.protocol || 'HTTP').slice(0, 80),
+      };
+    }),
+    comments: comments.map((comment) => {
+      assertObject(comment, 'Architecture payload is invalid');
+      const text = String(comment.text || '');
+      if (text.length > 2000) clientError(400, 'Architecture payload is invalid', { architecture: ['Comment text is too long'] });
+      return {
+        ...comment,
+        id: requiredPayloadString(comment.id, 'Comment id'),
+        x: finiteNumber(comment.x),
+        y: finiteNumber(comment.y),
+        text,
+      };
+    }),
+  };
+}
+
+function architectureFromBody(body, fallback) {
+  if (!Object.prototype.hasOwnProperty.call(body, 'architecture')) return fallback;
+  return validateArchitecturePayload(body.architecture);
+}
+
+function validateReviewPayload(status, review) {
+  if (status !== 'reviewed' || !review) return review || {};
+  const feedback = String(review.feedback || '').trim();
+  if (feedback.length < 20) {
+    clientError(400, 'Review feedback is required', { review: ['Add at least 20 characters of specific feedback'] });
+  }
+  return { ...review, feedback };
+}
+
+function appendEvent(db, interviewId, kind, actorRole, summary, now = new Date().toISOString()) {
+  db.prepare('INSERT INTO interview_events (id, interview_id, kind, actor_role, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id('evt'), interviewId, kind, actorRole, summary, now);
+}
+
+function eventsForInterview(db, interviewId) {
+  if (!db || !interviewId) return [];
+  return db.prepare('SELECT kind, actor_role, summary, created_at FROM interview_events WHERE interview_id = ? ORDER BY created_at DESC LIMIT 25')
+    .all(interviewId)
+    .map((row) => ({
+      kind: row.kind,
+      role: row.actor_role,
+      summary: row.summary,
+      createdAt: row.created_at,
+    }));
 }
 
 function userRow(row) {
@@ -240,7 +398,7 @@ function userRow(row) {
   };
 }
 
-function interviewRow(row, role = 'interviewer') {
+function interviewRow(row, role = 'interviewer', db = null) {
   if (!row) return null;
   const permissions = { ...DEFAULT_PERMISSIONS, ...parseJson(row.permissions_json, {}) };
   const visibility = visibilityFor(role, permissions);
@@ -261,6 +419,7 @@ function interviewRow(row, role = 'interviewer') {
     architecture: visibility.canSeeArchitecture ? parseJson(row.architecture_json, null) : null,
     scores: visibility.canSeeScorecard ? parseJson(row.scores_json, {}) : undefined,
     review: visibility.canSeeScorecard ? parseJson(row.review_json, {}) : undefined,
+    events: visibility.canSeeArchitecture ? eventsForInterview(db, row.id) : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -307,6 +466,8 @@ function visibilityFor(role, permissions) {
 function userFromToken(token, db, tokenSecret) {
   const payload = verifyToken(token, tokenSecret);
   if (!payload?.sub) return null;
+  const revoked = db.prepare('SELECT expires_at FROM revoked_tokens WHERE token_hash = ?').get(hashToken(token));
+  if (revoked && Date.parse(revoked.expires_at) > Date.now()) return null;
   return userRow(db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub));
 }
 
@@ -317,10 +478,14 @@ function cookieToken(req) {
     .sds_token;
 }
 
-function authUser(req, db, tokenSecret) {
+function requestToken(req) {
   const header = req.headers.authorization || '';
   const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
-  return userFromToken(bearer || cookieToken(req), db, tokenSecret);
+  return bearer || cookieToken(req) || '';
+}
+
+function authUser(req, db, tokenSecret) {
+  return userFromToken(requestToken(req), db, tokenSecret);
 }
 
 function requireAuth(req, db, tokenSecret) {
@@ -364,6 +529,79 @@ function createTokenForUser(user, tokenSecret) {
   return signToken({ sub: user.id, email: user.email, exp: Date.now() + 1000 * 60 * 60 * 24 * 30 }, tokenSecret);
 }
 
+function clientIp(req) {
+  return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown')
+    .split(',')[0]
+    .trim();
+}
+
+function rateLimitGroup(method, path) {
+  if (method === 'POST' && (path === '/api/auth/signup' || path === '/api/auth/login')) return 'auth';
+  if (path.startsWith('/api/share/')) return 'share';
+  return '';
+}
+
+function enforceRateLimit(context, req, path) {
+  const group = rateLimitGroup(req.method, path);
+  if (!group) return;
+  const config = context.rateLimits?.[group];
+  if (!config?.limit || !config?.windowMs) return;
+  const key = `${group}:${clientIp(req)}`;
+  const now = Date.now();
+  const current = context.rateLimitStore.get(key);
+  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + config.windowMs };
+  bucket.count += 1;
+  context.rateLimitStore.set(key, bucket);
+  if (bucket.count > config.limit) {
+    const error = new Error('Too many requests. Try again shortly.');
+    error.status = 429;
+    throw error;
+  }
+}
+
+function activeShareRow(db, token) {
+  return db.prepare(`
+    SELECT share_tokens.role, share_tokens.expires_at, share_tokens.revoked_at, interviews.*
+    FROM share_tokens
+    JOIN interviews ON interviews.id = share_tokens.interview_id
+    WHERE share_tokens.token_hash = ?
+  `).get(hashToken(token));
+}
+
+function isShareInactive(share, now = Date.now()) {
+  if (!share) return false;
+  return Boolean(share.revoked_at || (share.expires_at && Date.parse(share.expires_at) <= now));
+}
+
+function assertActiveShare(share, cors, res) {
+  if (!share) {
+    json(res, 404, { error: 'Share link not found' }, cors);
+    return false;
+  }
+  if (isShareInactive(share)) {
+    json(res, 410, { error: 'Share link expired or revoked' }, cors);
+    return false;
+  }
+  return true;
+}
+
+function shareExpiryFromBody(body) {
+  const raw = body && Object.prototype.hasOwnProperty.call(body, 'expiresInHours')
+    ? Number(body.expiresInHours)
+    : DEFAULT_SHARE_TTL_HOURS;
+  const hours = Number.isFinite(raw) ? raw : DEFAULT_SHARE_TTL_HOURS;
+  return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+}
+
+function assertExpectedVersion(body, row, role, db) {
+  if (!body.expectedUpdatedAt) return;
+  if (String(body.expectedUpdatedAt) === String(row.updated_at)) return;
+  const error = new Error('Interview changed since you loaded it');
+  error.status = 409;
+  error.current = interviewRow(row, role, db);
+  throw error;
+}
+
 function resolveTokenSecret(options) {
   if (options.tokenSecret) return options.tokenSecret;
   if (process.env.SDS_TOKEN_SECRET) return process.env.SDS_TOKEN_SECRET;
@@ -399,11 +637,12 @@ async function routeApi(req, res, context) {
     res.end();
     return;
   }
+  enforceRateLimit(context, req, path);
 
   if (req.method === 'POST' && path === '/api/auth/signup') {
     const body = await readBody(req);
     const name = requiredString(body.name, 'name');
-    const email = normalizeEmail(requiredString(body.email, 'email'));
+    const email = requiredEmail(body.email);
     const password = requiredSignupPassword(body.password);
     const now = new Date().toISOString();
     const user = { id: id('usr'), name, email, createdAt: now };
@@ -425,7 +664,7 @@ async function routeApi(req, res, context) {
 
   if (req.method === 'POST' && path === '/api/auth/login') {
     const body = await readBody(req);
-    const email = normalizeEmail(requiredString(body.email, 'email'));
+    const email = requiredEmail(body.email);
     const password = requiredString(body.password, 'password');
     const row = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!row || !verifyPassword(password, row.password_hash)) {
@@ -439,6 +678,22 @@ async function routeApi(req, res, context) {
     return;
   }
 
+  if (req.method === 'POST' && path === '/api/auth/logout') {
+    const token = requestToken(req);
+    const payload = verifyToken(token, tokenSecret);
+    if (!payload?.sub) {
+      const error = new Error('Authentication required');
+      error.status = 401;
+      throw error;
+    }
+    const now = new Date().toISOString();
+    const expiresAt = new Date(payload.exp || Date.now()).toISOString();
+    db.prepare('INSERT OR REPLACE INTO revoked_tokens (token_hash, expires_at, revoked_at) VALUES (?, ?, ?)')
+      .run(hashToken(token), expiresAt, now);
+    json(res, 200, { revoked: true }, cors);
+    return;
+  }
+
   if (req.method === 'GET' && path === '/api/me') {
     const user = requireAuth(req, db, tokenSecret);
     json(res, 200, { user }, cors);
@@ -448,7 +703,7 @@ async function routeApi(req, res, context) {
   if (req.method === 'GET' && path === '/api/interviews') {
     const user = requireAuth(req, db, tokenSecret);
     const rows = db.prepare('SELECT * FROM interviews WHERE owner_user_id = ? ORDER BY updated_at DESC').all(user.id);
-    json(res, 200, { interviews: rows.map((row) => interviewRow(row, 'interviewer')) }, cors);
+    json(res, 200, { interviews: rows.map((row) => interviewRow(row, 'interviewer', db)) }, cors);
     return;
   }
 
@@ -464,12 +719,12 @@ async function routeApi(req, res, context) {
       title: requiredString(body.title, 'title'),
       prompt: requiredString(body.prompt || body.title, 'prompt'),
       candidateName: requiredString(body.candidateName || 'Candidate', 'candidateName'),
-      candidateEmail: normalizeEmail(body.candidateEmail),
+      candidateEmail: requiredEmail(body.candidateEmail, 'candidateEmail', { optional: true }),
       difficulty: body.difficulty || 'Medium',
       duration: Number(body.duration || 45),
       status: 'in-progress',
       permissions,
-      architecture: body.architecture || defaultArchitecture(),
+      architecture: architectureFromBody(body, defaultArchitecture()),
       scores: body.scores || defaultScores(),
       createdAt: now,
       updatedAt: now,
@@ -494,15 +749,29 @@ async function routeApi(req, res, context) {
       JSON.stringify(interview.architecture),
       JSON.stringify(interview.scores),
       JSON.stringify(body.review || {}),
-      interview.createdAt,
-      interview.updatedAt,
-    );
+	      interview.createdAt,
+	      interview.updatedAt,
+	    );
+    appendEvent(db, interview.id, 'created', 'interviewer', 'Interview workspace created', now);
     const row = db.prepare('SELECT * FROM interviews WHERE id = ?').get(interview.id);
-    json(res, 201, { interview: interviewRow(row, 'interviewer') }, cors);
+    json(res, 201, { interview: interviewRow(row, 'interviewer', db) }, cors);
     return;
   }
 
   const interviewPatch = path.match(/^\/api\/interviews\/([^/]+)$/);
+  if (interviewPatch && req.method === 'DELETE') {
+    const user = requireAuth(req, db, tokenSecret);
+    const interviewId = interviewPatch[1];
+    const row = db.prepare('SELECT id FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+    if (!row) {
+      json(res, 404, { error: 'Interview not found' }, cors);
+      return;
+    }
+    db.prepare('DELETE FROM interviews WHERE id = ? AND owner_user_id = ?').run(interviewId, user.id);
+    json(res, 200, { deleted: true, interviewId }, cors);
+    return;
+  }
+
   if (interviewPatch && req.method === 'PATCH') {
     const user = requireAuth(req, db, tokenSecret);
     const interviewId = interviewPatch[1];
@@ -512,19 +781,22 @@ async function routeApi(req, res, context) {
       return;
     }
     const body = await readBody(req);
+    assertExpectedVersion(body, row, 'interviewer', db);
     const permissions = { ...parseJson(row.permissions_json, {}), ...(body.permissions || {}) };
+    const status = body.status || row.status;
+    const review = validateReviewPayload(status, body.review || parseJson(row.review_json, {}));
     const updated = {
       title: body.title || row.title,
       prompt: body.prompt || row.prompt,
       candidateName: body.candidateName || row.candidate_name,
-      candidateEmail: normalizeEmail(body.candidateEmail ?? row.candidate_email),
+      candidateEmail: requiredEmail(body.candidateEmail ?? row.candidate_email, 'candidateEmail', { optional: true }),
       difficulty: body.difficulty || row.difficulty,
       duration: Number(body.duration || row.duration),
-      status: body.status || row.status,
+      status,
       permissions,
-      architecture: body.architecture || parseJson(row.architecture_json, defaultArchitecture()),
+      architecture: architectureFromBody(body, parseJson(row.architecture_json, defaultArchitecture())),
       scores: body.scores || parseJson(row.scores_json, defaultScores()),
-      review: body.review || parseJson(row.review_json, {}),
+      review,
       updatedAt: new Date().toISOString(),
     };
     db.prepare(`
@@ -547,15 +819,16 @@ async function routeApi(req, res, context) {
       updated.updatedAt,
       interviewId,
       user.id,
-    );
+	    );
     const next = db.prepare('SELECT * FROM interviews WHERE id = ?').get(interviewId);
+    appendEvent(db, interviewId, updated.status === 'reviewed' ? 'reviewed' : 'updated', 'interviewer', updated.status === 'reviewed' ? 'Final review submitted' : 'Workspace updated', updated.updatedAt);
     context.broadcastInterviewUpdate(interviewId, updated.updatedAt);
-    json(res, 200, { interview: interviewRow(next, 'interviewer') }, cors);
+    json(res, 200, { interview: interviewRow(next, 'interviewer', db) }, cors);
     return;
   }
 
   const shareMatch = path.match(/^\/api\/interviews\/([^/]+)\/share$/);
-  if (shareMatch && req.method === 'POST') {
+  if (shareMatch && req.method === 'DELETE') {
     const user = requireAuth(req, db, tokenSecret);
     const interviewId = shareMatch[1];
     const row = db.prepare('SELECT * FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
@@ -563,67 +836,76 @@ async function routeApi(req, res, context) {
       json(res, 404, { error: 'Interview not found' }, cors);
       return;
     }
+    const now = new Date().toISOString();
+    const result = db.prepare('UPDATE share_tokens SET revoked_at = ? WHERE interview_id = ? AND revoked_at IS NULL')
+      .run(now, interviewId);
+    appendEvent(db, interviewId, 'share.revoked', 'interviewer', 'Active share links revoked', now);
+    json(res, 200, { revoked: true, count: result.changes || 0 }, cors);
+    return;
+  }
+
+  if (shareMatch && req.method === 'POST') {
+    const user = requireAuth(req, db, tokenSecret);
+    const interviewId = shareMatch[1];
+    const row = db.prepare('SELECT * FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+    if (!row) {
+      json(res, 404, { error: 'Interview not found' }, cors);
+      return;
+	    }
+    const body = await readBody(req);
     const tokens = {};
     const links = {};
     const now = new Date().toISOString();
+    const expiresAt = shareExpiryFromBody(body);
+    db.prepare('UPDATE share_tokens SET revoked_at = ? WHERE interview_id = ? AND revoked_at IS NULL').run(now, interviewId);
     for (const role of ['candidate', 'interviewer', 'panel']) {
       const token = randomBytes(32).toString('base64url');
       db.prepare('INSERT INTO share_tokens (token_hash, interview_id, role, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(hashToken(token), interviewId, role, user.id, now, null);
+        .run(hashToken(token), interviewId, role, user.id, now, expiresAt);
       tokens[role] = token;
       links[role] = shareUrl(publicOrigin, token);
     }
-    json(res, 200, { links, tokens }, cors);
+    appendEvent(db, interviewId, 'share.generated', 'interviewer', 'Fresh role-based share links generated', now);
+    json(res, 200, { links, tokens, expiresAt }, cors);
     return;
   }
 
   const shareLookup = path.match(/^\/api\/share\/([^/]+)$/);
   if (shareLookup && (req.method === 'GET' || req.method === 'PATCH')) {
     const token = shareLookup[1];
-    const share = db.prepare(`
-      SELECT share_tokens.role, interviews.*
-      FROM share_tokens
-      JOIN interviews ON interviews.id = share_tokens.interview_id
-      WHERE share_tokens.token_hash = ?
-    `).get(hashToken(token));
-    if (!share) {
-      json(res, 404, { error: 'Share link not found' }, cors);
-      return;
-    }
+    const share = activeShareRow(db, token);
+    if (!assertActiveShare(share, cors, res)) return;
     const permissions = { ...DEFAULT_PERMISSIONS, ...parseJson(share.permissions_json, {}) };
     const visibility = visibilityFor(share.role, permissions);
     if (req.method === 'PATCH') {
       if (!visibility.canEditCanvas) {
         json(res, 403, { error: 'This role cannot edit the canvas' }, cors);
         return;
-      }
+	    }
       const body = await readBody(req);
-      const architecture = body.architecture || parseJson(share.architecture_json, defaultArchitecture());
+      assertExpectedVersion(body, share, share.role, db);
+      const architecture = architectureFromBody(body, parseJson(share.architecture_json, defaultArchitecture()));
       const canUpdateReview = share.role === 'interviewer';
-      const scores = canUpdateReview && body.scores ? body.scores : parseJson(share.scores_json, defaultScores());
-      const review = canUpdateReview && body.review ? body.review : parseJson(share.review_json, {});
       const status = canUpdateReview && body.status ? body.status : share.status;
+      const scores = canUpdateReview && body.scores ? body.scores : parseJson(share.scores_json, defaultScores());
+      const review = validateReviewPayload(status, canUpdateReview && body.review ? body.review : parseJson(share.review_json, {}));
       const updatedAt = new Date().toISOString();
       db.prepare('UPDATE interviews SET architecture_json = ?, scores_json = ?, review_json = ?, status = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(architecture), JSON.stringify(scores), JSON.stringify(review), status, updatedAt, share.id);
+      appendEvent(db, share.id, status === 'reviewed' ? 'reviewed' : 'updated', share.role, status === 'reviewed' ? 'Final review submitted from share link' : `Workspace updated by ${share.role}`, updatedAt);
       context.broadcastInterviewUpdate(share.id, updatedAt);
-      const next = db.prepare(`
-        SELECT share_tokens.role, interviews.*
-        FROM share_tokens
-        JOIN interviews ON interviews.id = share_tokens.interview_id
-        WHERE share_tokens.token_hash = ?
-      `).get(hashToken(token));
+      const next = activeShareRow(db, token);
       json(res, 200, {
         role: next.role,
         visibility,
-        interview: interviewRow(next, next.role),
+        interview: interviewRow(next, next.role, db),
       }, cors);
       return;
     }
     json(res, 200, {
       role: share.role,
       visibility,
-      interview: interviewRow(share, share.role),
+      interview: interviewRow(share, share.role, db),
     }, cors);
     return;
   }
@@ -636,15 +918,24 @@ function authorizeWebSocket(req, interviewId, context) {
   const url = new URL(req.url, 'http://localhost');
   const shareToken = url.searchParams.get('share') || '';
   if (shareToken) {
-    const share = db.prepare('SELECT interview_id FROM share_tokens WHERE token_hash = ?').get(hashToken(shareToken));
-    return share?.interview_id === interviewId;
+    const share = db.prepare('SELECT interview_id, role, expires_at, revoked_at FROM share_tokens WHERE token_hash = ?').get(hashToken(shareToken));
+    if (share?.interview_id !== interviewId || isShareInactive(share)) return null;
+    return { role: share.role, interviewId, userId: `share:${hashToken(shareToken).slice(0, 12)}` };
   }
 
   const authToken = url.searchParams.get('auth') || cookieToken(req) || '';
   const user = userFromToken(authToken, db, tokenSecret);
-  if (!user) return false;
+  if (!user) return null;
   const row = db.prepare('SELECT id FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
-  return Boolean(row);
+  return row ? { role: 'interviewer', interviewId, userId: user.id } : null;
+}
+
+function presenceFor(sockets) {
+  const presence = { interviewer: 0, candidate: 0, panel: 0 };
+  for (const client of sockets || []) {
+    if (Object.prototype.hasOwnProperty.call(presence, client.role)) presence[client.role] += 1;
+  }
+  return presence;
 }
 
 function handleWebSocketUpgrade(req, socket, head, context) {
@@ -657,7 +948,8 @@ function handleWebSocketUpgrade(req, socket, head, context) {
   }
 
   const interviewId = decodeURIComponent(match[1]);
-  if (!authorizeWebSocket(req, interviewId, context)) {
+  const auth = authorizeWebSocket(req, interviewId, context);
+  if (!auth) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return;
@@ -677,23 +969,27 @@ function handleWebSocketUpgrade(req, socket, head, context) {
     sockets = new Set();
     context.webSockets.set(interviewId, sockets);
   }
-  sockets.add(socket);
+  const client = { socket, role: auth.role, userId: auth.userId };
+  sockets.add(client);
 
-  websocketSend(socket, { type: 'connected', interviewId });
+  websocketSend(socket, { type: 'connected', interviewId, role: auth.role, presence: presenceFor(sockets) });
+  context.broadcastPresence(interviewId);
 
   socket.on('data', (buffer) => {
     const opcode = buffer[0] & 0x0f;
     if (opcode === 0x8) websocketClose(socket);
     if (opcode === 0x9) socket.write(websocketFrame(Buffer.alloc(0), 0x0a));
   });
-  socket.on('close', () => {
-    sockets.delete(socket);
-    if (!sockets.size) context.webSockets.delete(interviewId);
-  });
-  socket.on('error', () => {
-    sockets.delete(socket);
-    if (!sockets.size) context.webSockets.delete(interviewId);
-  });
+  const cleanup = () => {
+    if (!sockets.delete(client)) return;
+    if (!sockets.size) {
+      context.webSockets.delete(interviewId);
+      return;
+    }
+    context.broadcastPresence(interviewId);
+  };
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
 }
 
 function serveStatic(req, res) {
@@ -720,11 +1016,21 @@ export function createApiServer(options = {}) {
     publicOrigin: options.publicOrigin || process.env.SDS_PUBLIC_ORIGIN || 'http://127.0.0.1:8787/',
     tokenSecret: resolveTokenSecret(options),
     webSockets: new Map(),
+    rateLimitStore: new Map(),
+    rateLimits: { ...DEFAULT_RATE_LIMITS, ...(options.rateLimits || {}) },
     broadcastInterviewUpdate(interviewId, updatedAt) {
       const sockets = this.webSockets.get(interviewId);
       if (!sockets?.size) return;
-      for (const socket of sockets) {
-        websocketSend(socket, { type: 'interview.updated', interviewId, updatedAt });
+      for (const client of sockets) {
+        websocketSend(client.socket, { type: 'interview.updated', interviewId, updatedAt });
+      }
+    },
+    broadcastPresence(interviewId) {
+      const sockets = this.webSockets.get(interviewId);
+      if (!sockets?.size) return;
+      const presence = presenceFor(sockets);
+      for (const client of sockets) {
+        websocketSend(client.socket, { type: 'presence.updated', interviewId, presence });
       }
     },
   };
@@ -745,6 +1051,7 @@ export function createApiServer(options = {}) {
       json(res, status, {
         error: status >= 500 ? 'Internal server error' : error.message,
         ...(status < 500 && error.details ? { details: error.details } : {}),
+        ...(status === 409 && error.current ? { current: error.current } : {}),
       }, corsHeaders(req, context.publicOrigin));
     }
   });

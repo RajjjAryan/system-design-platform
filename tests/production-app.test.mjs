@@ -52,10 +52,13 @@ for (const snippet of [
   'renderInspector',
   'renderDiagnostics',
   'renderReview',
+  'renderLegalPage',
   'injectScenario',
   'Architecture health',
   'Create interview',
   'Finish & review',
+  'data-action="privacy"',
+  'data-action="terms"',
 ]) {
   assert.ok(app.includes(snippet), `Expected public/app.js to include ${snippet}`);
 }

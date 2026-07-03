@@ -76,6 +76,7 @@ try {
   const interview = await createInterview(app.baseUrl, owner.token);
   const share = await request(app.baseUrl, 'POST', `/api/interviews/${interview.id}/share`, null, owner.token);
   assert.equal(share.response.status, 200);
+  assert.match(share.json.expiresAt, /^\d{4}-\d{2}-\d{2}T/);
 
   const candidate = await request(app.baseUrl, 'GET', `/api/share/${share.json.tokens.candidate}`);
   assert.equal(candidate.response.status, 200);
@@ -100,6 +101,28 @@ try {
   assert.equal(ownerView.response.status, 200);
   assert.equal(ownerView.json.interviews[0].architecture.comps.length, 2);
   assert.equal(ownerView.json.interviews[0].architecture.edges.length, 1);
+
+  const staleEdit = await request(app.baseUrl, 'PATCH', `/api/share/${share.json.tokens.candidate}`, {
+    expectedUpdatedAt: candidate.json.interview.updatedAt,
+    architecture: {
+      comps: [{ id: 'stale', type: 'Stale API', cat: 'Compute', x: 1, y: 1 }],
+      edges: [],
+      comments: [],
+    },
+  });
+  assert.equal(staleEdit.response.status, 409);
+  assert.equal(staleEdit.json.error, 'Interview changed since you loaded it');
+  assert.equal(staleEdit.json.current.architecture.comps.length, 2);
+
+  const malformedArchitecture = await request(app.baseUrl, 'PATCH', `/api/share/${share.json.tokens.candidate}`, {
+    architecture: {
+      comps: 'not-an-array',
+      edges: [],
+      comments: [],
+    },
+  });
+  assert.equal(malformedArchitecture.response.status, 400);
+  assert.equal(malformedArchitecture.json.error, 'Architecture payload is invalid');
 
   const review = await request(app.baseUrl, 'PATCH', `/api/interviews/${interview.id}`, {
     status: 'reviewed',
@@ -136,6 +159,25 @@ try {
     architecture: { comps: [], edges: [], comments: [] },
   });
   assert.equal(forbidden.response.status, 403);
+
+  const expiring = await request(app.baseUrl, 'POST', `/api/interviews/${locked.id}/share`, { expiresInHours: 0 }, owner.token);
+  assert.equal(expiring.response.status, 200);
+  const expired = await request(app.baseUrl, 'GET', `/api/share/${expiring.json.tokens.candidate}`);
+  assert.equal(expired.response.status, 410);
+  assert.equal(expired.json.error, 'Share link expired or revoked');
+
+  const fresh = await request(app.baseUrl, 'POST', `/api/interviews/${locked.id}/share`, null, owner.token);
+  assert.equal(fresh.response.status, 200);
+  const revoke = await request(app.baseUrl, 'DELETE', `/api/interviews/${locked.id}/share`, null, owner.token);
+  assert.equal(revoke.response.status, 200);
+  assert.equal(revoke.json.revoked, true);
+  const revoked = await request(app.baseUrl, 'GET', `/api/share/${fresh.json.tokens.candidate}`);
+  assert.equal(revoked.response.status, 410);
+
+  const deleted = await request(app.baseUrl, 'DELETE', `/api/interviews/${locked.id}`, null, owner.token);
+  assert.equal(deleted.response.status, 200);
+  const afterDelete = await request(app.baseUrl, 'GET', '/api/interviews', null, owner.token);
+  assert.equal(afterDelete.json.interviews.some((item) => item.id === locked.id), false);
 } finally {
   await app.close();
 }

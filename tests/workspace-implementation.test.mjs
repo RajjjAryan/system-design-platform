@@ -27,5 +27,6 @@ for (const marker of requiredImplementationMarkers) {
 }
 
 assert.doesNotMatch(source, /Saved locally|deployable static artifact|Evaluation submitted|No generated answers/);
+assert.doesNotMatch(source, /window\.prompt/, 'Comment creation must use the in-canvas text box UI, not blocking browser prompts');
 assert.match(styles, /\.left-panel,\s*\.right-panel\s*\{[\s\S]*display:\s*flex;[\s\S]*flex-direction:\s*column;/);
 assert.match(styles, /\.panel-scroll\s*\{[\s\S]*overflow-y:\s*auto;/);

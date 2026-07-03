@@ -246,12 +246,34 @@ textarea:disabled {
 }
 
 .resume-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
   padding: 16px 18px;
   border-color: rgba(99, 102, 241, 0.28);
   background: linear-gradient(120deg, rgba(99, 102, 241, 0.14), rgba(99, 102, 241, 0.03));
+}
+
+.session-card {
+  display: grid;
+  gap: 12px;
+}
+
+.session-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.session-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .question-grid {
@@ -484,6 +506,13 @@ textarea:disabled {
   margin-top: 14px;
 }
 
+.setup-question-list {
+  max-height: 360px;
+  overflow-y: auto;
+  margin-top: 12px;
+  padding-right: 4px;
+}
+
 .palette-item {
   display: flex;
   align-items: center;
@@ -528,6 +557,10 @@ textarea:disabled {
   overflow: auto;
   padding: 14px;
   z-index: 4;
+}
+
+.mobile-addbar {
+  display: none;
 }
 
 .question-panel-collapsed {
@@ -918,6 +951,32 @@ textarea:disabled {
   overflow-y: auto;
 }
 
+.timeline {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.timeline-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.16);
+}
+
 .score-dot {
   width: 15px;
   height: 15px;
@@ -1024,6 +1083,19 @@ textarea:disabled {
 
   .canvas-wrap {
     min-height: 560px;
+  }
+
+  .mobile-addbar {
+    position: absolute;
+    right: 12px;
+    top: 12px;
+    z-index: 6;
+    display: block;
+    width: min(220px, calc(100% - 24px));
+  }
+
+  .question-panel {
+    top: 58px;
   }
 
   .statusbar {

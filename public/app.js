@@ -92,6 +92,7 @@ class ApiClient {
       const error = new Error(payload?.error || `Request failed with ${response.status}`);
       error.status = response.status;
       error.details = payload?.details || {};
+      error.current = payload?.current || null;
       throw error;
     }
     return payload;
@@ -103,6 +104,10 @@ class ApiClient {
 
   login(body) {
     return this.request('/api/auth/login', { method: 'POST', body, token: '' });
+  }
+
+  logout() {
+    return this.request('/api/auth/logout', { method: 'POST' });
   }
 
   me() {
@@ -121,8 +126,16 @@ class ApiClient {
     return this.request(`/api/interviews/${encodeURIComponent(id)}/share`, { method: 'POST' });
   }
 
+  revokeShareLinks(id) {
+    return this.request(`/api/interviews/${encodeURIComponent(id)}/share`, { method: 'DELETE' });
+  }
+
   updateInterview(id, body) {
     return this.request(`/api/interviews/${encodeURIComponent(id)}`, { method: 'PATCH', body });
+  }
+
+  deleteInterview(id) {
+    return this.request(`/api/interviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
   share(token) {
@@ -216,6 +229,7 @@ function normalizeSession(session) {
     architecture: session.architecture || { comps: [], edges: [], comments: [] },
     scores: session.scores || {},
     review: session.review || {},
+    events: Array.isArray(session.events) ? session.events : [],
     updatedAt: session.updatedAt || new Date().toISOString(),
     createdAt: session.createdAt || session.updatedAt || new Date().toISOString(),
   };
@@ -321,6 +335,11 @@ export function createInitialState({ storage, location } = {}) {
     shareLinks: {},
     candidateLink: '',
     interviewerLink: '',
+    shareExpiresAt: '',
+    setupQuery: '',
+    setupBusy: false,
+    setupError: '',
+    shareBusy: false,
     pan: { x: 0, y: 0 },
     connectionStartId: null,
     paletteQuery: '',
@@ -334,6 +353,8 @@ export function createInitialState({ storage, location } = {}) {
     connectionPreview: null,
     comments: activeSession?.architecture?.comments || [],
     saveState: activeSession ? 'saved' : 'idle',
+    syncState: activeSession ? 'offline' : 'idle',
+    presence: { interviewer: 0, candidate: 0, panel: 0 },
     reviewFeedback: activeSession?.review?.feedback || '',
     reviewDecision: activeSession?.review?.decision || '',
     comps: [],
@@ -502,10 +523,12 @@ export class SystemDesignStudio {
     } catch {
       // Socket may already be closed.
     }
+    this.state.syncState = 'offline';
   }
 
   scheduleSharedSocketReconnect() {
     if (this.reconnectTimer || !['workspace', 'review'].includes(this.state.screen)) return;
+    this.setState({ syncState: 'reconnecting' });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connectSharedSocket();
@@ -514,15 +537,31 @@ export class SystemDesignStudio {
 
   connectSharedSocket() {
     const url = this.webSocketUrl();
-    if (!url) return;
+    if (!url) {
+      this.setState({ syncState: 'offline' });
+      return;
+    }
     if (this.sharedSocket && this.sharedSocketUrl === url && this.sharedSocket.readyState <= 1) return;
     this.closeSharedSocket();
     try {
+      this.state.syncState = 'connecting';
       const socket = new this.WebSocket(url);
       this.sharedSocket = socket;
       this.sharedSocketUrl = url;
       socket.addEventListener('message', (event) => {
         const payload = safeJsonParse(event.data, null);
+        if (payload?.type === 'connected') {
+          this.setState({
+            role: payload.role || this.state.role,
+            presence: payload.presence || this.state.presence,
+            syncState: 'live',
+          });
+          return;
+        }
+        if (payload?.type === 'presence.updated') {
+          this.setState({ presence: payload.presence || this.state.presence, syncState: 'live' });
+          return;
+        }
         if (payload?.type === 'interview.updated' && payload.interviewId === this.state.activeSessionId) {
           void this.refreshActiveSession({ force: true });
         }
@@ -531,6 +570,7 @@ export class SystemDesignStudio {
         if (this.sharedSocket === socket) {
           this.sharedSocket = null;
           this.sharedSocketUrl = '';
+          this.setState({ syncState: 'reconnecting' });
           this.scheduleSharedSocketReconnect();
         }
       });
@@ -538,6 +578,7 @@ export class SystemDesignStudio {
         if (this.sharedSocket === socket) {
           this.sharedSocket = null;
           this.sharedSocketUrl = '';
+          this.setState({ syncState: 'reconnecting' });
           this.scheduleSharedSocketReconnect();
         }
       });
@@ -576,12 +617,34 @@ export class SystemDesignStudio {
     return updated;
   }
 
+  applySessionToWorkspace(session, { role = this.state.role, visibility = this.state.visibility, saveState = 'saved' } = {}) {
+    const saved = this.upsertSession(session);
+    const canvas = saved.architecture || { comps: [], edges: [], comments: [] };
+    const selectedExists = (canvas.comps || []).some((component) => component.id === this.state.selectedId);
+    const edgeExists = (canvas.edges || []).some((edge) => edge.id === this.state.selectedEdgeId);
+    this.setState({
+      activeSessionId: saved.id,
+      question: saved.questionId,
+      role,
+      visibility,
+      saveState,
+      comps: (canvas.comps || []).map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+      edges: (canvas.edges || []).map((edge) => ({ ...edge })),
+      comments: (canvas.comments || []).map((comment) => ({ ...comment })),
+      reviewFeedback: saved.review?.feedback || this.state.reviewFeedback,
+      reviewDecision: saved.review?.decision || this.state.reviewDecision,
+      selectedId: selectedExists ? this.state.selectedId : null,
+      selectedEdgeId: edgeExists ? this.state.selectedEdgeId : null,
+    });
+    return saved;
+  }
+
   async persistArchitecture() {
-    const active = this.updateActiveSessionPatch({ architecture: this.architecturePayload() });
+    const active = this.activeSession();
     if (!active) return;
     this.setState({ saveState: 'saving' });
     try {
-      const body = { architecture: active.architecture };
+      const body = { architecture: this.architecturePayload(), expectedUpdatedAt: active.updatedAt };
       const result = this.state.pendingShareToken
         ? await this.api.updateSharedInterview(this.state.pendingShareToken, body)
         : await this.api.updateInterview(active.id, body);
@@ -593,6 +656,11 @@ export class SystemDesignStudio {
         visibility: result.visibility || this.state.visibility,
       });
     } catch (error) {
+      if (error.status === 409 && error.current) {
+        this.applySessionToWorkspace(error.current, { saveState: 'conflict' });
+        this.toast('Workspace changed; latest version loaded');
+        return;
+      }
       this.setState({ saveState: 'save failed' });
       this.toast(error.message);
     }
@@ -601,6 +669,10 @@ export class SystemDesignStudio {
   async saveReview(decision) {
     const active = this.activeSession();
     if (!active || !this.canSubmitReview()) return;
+    if (this.state.reviewFeedback.trim().length < 20) {
+      this.toast('Add specific feedback before submitting the review');
+      return;
+    }
     const review = {
       decision,
       feedback: this.state.reviewFeedback.trim(),
@@ -615,6 +687,7 @@ export class SystemDesignStudio {
         scores: this.state.scores,
         review,
         architecture: this.architecturePayload(),
+        expectedUpdatedAt: active.updatedAt,
       };
       const result = this.state.pendingShareToken
         ? await this.api.updateSharedInterview(this.state.pendingShareToken, body)
@@ -628,6 +701,11 @@ export class SystemDesignStudio {
       });
       this.toast('Review saved');
     } catch (error) {
+      if (error.status === 409 && error.current) {
+        this.applySessionToWorkspace(error.current, { saveState: 'conflict' });
+        this.toast('Workspace changed; latest version loaded');
+        return;
+      }
       this.setState({ saveState: 'save failed' });
       this.toast(error.message);
     }
@@ -654,19 +732,101 @@ export class SystemDesignStudio {
   }
 
   async persistSessionFromSetup() {
+    if (this.state.setupBusy) return null;
     if (!this.state.currentUser) {
       this.setState({ screen: 'login' });
       return null;
     }
-    const created = await this.api.createInterview(this.sessionPayloadFromDraft());
-    const session = this.upsertSession(created.interview);
-    const share = await this.api.shareInterview(session.id);
-    this.setState({
-      shareLinks: share.links,
-      candidateLink: share.links.candidate,
-      interviewerLink: share.links.interviewer,
-    });
-    return session;
+    this.setState({ setupBusy: true, setupError: '' });
+    try {
+      const created = await this.api.createInterview(this.sessionPayloadFromDraft());
+      const session = this.upsertSession(created.interview);
+      const share = await this.api.shareInterview(session.id);
+      this.setState({
+        shareLinks: share.links,
+        candidateLink: share.links.candidate,
+        interviewerLink: share.links.interviewer,
+        shareExpiresAt: share.expiresAt || '',
+        setupBusy: false,
+      });
+      return session;
+    } catch (error) {
+      this.setState({ setupBusy: false, setupError: error.message });
+      this.toast(error.message);
+      return null;
+    }
+  }
+
+  async openShareLinks(sessionId = this.state.activeSessionId) {
+    const session = this.state.sessions.find((item) => item.id === sessionId);
+    if (!session || this.state.shareBusy) return;
+    this.setState({ shareBusy: true, activeSessionId: session.id });
+    try {
+      const share = await this.api.shareInterview(session.id);
+      this.setState({
+        screen: 'link',
+        shareLinks: share.links,
+        candidateLink: share.links.candidate,
+        interviewerLink: share.links.interviewer,
+        shareExpiresAt: share.expiresAt || '',
+        shareBusy: false,
+      });
+    } catch (error) {
+      this.setState({ shareBusy: false });
+      this.toast(error.message);
+    }
+  }
+
+  async revokeShareLinks() {
+    const session = this.activeSession();
+    if (!session || this.state.shareBusy) return;
+    this.setState({ shareBusy: true });
+    try {
+      await this.api.revokeShareLinks(session.id);
+      this.setState({
+        shareBusy: false,
+        shareLinks: {},
+        candidateLink: '',
+        interviewerLink: '',
+        shareExpiresAt: '',
+      });
+      this.toast('Share links revoked');
+    } catch (error) {
+      this.setState({ shareBusy: false });
+      this.toast(error.message);
+    }
+  }
+
+  async archiveSession(sessionId) {
+    const session = this.state.sessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    try {
+      const result = await this.api.updateInterview(session.id, {
+        status: 'archived',
+        expectedUpdatedAt: session.updatedAt,
+      });
+      this.upsertSession(result.interview);
+      this.toast('Interview archived');
+    } catch (error) {
+      this.toast(error.message);
+    }
+  }
+
+  async deleteSession(sessionId) {
+    const session = this.state.sessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    try {
+      if (typeof this.api.deleteInterview === 'function') await this.api.deleteInterview(session.id);
+      const sessions = this.state.sessions.filter((item) => item.id !== session.id);
+      this.saveSessions(sessions);
+      this.setState({
+        sessions,
+        activeSessionId: this.state.activeSessionId === session.id ? sessions[0]?.id || null : this.state.activeSessionId,
+      });
+      this.toast('Interview deleted');
+    } catch (error) {
+      this.toast(error.message);
+    }
   }
 
   createSessionFromSetup() {
@@ -689,6 +849,10 @@ export class SystemDesignStudio {
       shareLinks: {},
       candidateLink: '',
       interviewerLink: '',
+      shareExpiresAt: '',
+      setupQuery: '',
+      setupBusy: false,
+      setupError: '',
       comps: [],
       edges: [],
       comments: [],
@@ -704,6 +868,8 @@ export class SystemDesignStudio {
       editingEdgeId: null,
       connectionPreview: null,
       saveState: 'idle',
+      syncState: 'idle',
+      presence: { interviewer: 0, candidate: 0, panel: 0 },
     });
   }
 
@@ -743,6 +909,8 @@ export class SystemDesignStudio {
       problemsOpen: false,
       aiOpen: false,
       inspectorTab: 'general',
+      syncState: 'connecting',
+      presence: { interviewer: 0, candidate: 0, panel: 0 },
     });
     this.connectSharedSocket();
   }
@@ -889,6 +1057,8 @@ export class SystemDesignStudio {
       : this.state.screen === 'dashboard' ? this.renderDashboard()
       : this.state.screen === 'setup' ? this.renderSetup()
       : this.state.screen === 'link' ? this.renderLinkGenerated()
+      : this.state.screen === 'privacy' ? this.renderLegalPage('privacy')
+      : this.state.screen === 'terms' ? this.renderLegalPage('terms')
       : this.state.screen === 'review' ? this.renderReview()
       : this.renderWorkspace();
     this.root.innerHTML = html + (this.state.toast ? `<div class="toast">${esc(this.state.toast)}</div>` : '');
@@ -945,6 +1115,10 @@ export class SystemDesignStudio {
               </div>` : ''}
             <button class="btn primary" style="width:100%;margin-top:16px" data-action="signIn">${invite ? 'Continue to invite' : this.state.authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
             <div class="subtle" style="font-size:12px;margin-top:10px">Accounts and interviews are stored by the configured SystemDesign Studio API.</div>
+            <div style="display:flex;gap:10px;margin-top:12px">
+              <button class="pill pill-button" data-action="privacy">Privacy</button>
+              <button class="pill pill-button" data-action="terms">Terms</button>
+            </div>
             ${invite ? `<div class="visibility-card" style="margin-top:16px">
               <div class="mono-label">Invite visibility</div>
               <div class="visibility-row"><span>Role</span><strong>${esc(ROLE_LABELS[invite.role] || invite.role)}</strong></div>
@@ -995,10 +1169,41 @@ export class SystemDesignStudio {
       </div>`;
   }
 
+  renderLegalPage(kind) {
+    const privacy = kind === 'privacy';
+    const rows = privacy ? [
+      ['Account data', 'We store your name, email, password hash, and interview ownership so your dashboard is user-specific.'],
+      ['Interview data', 'We store prompts, canvas architecture, comments, scores, review notes, event history, and role-based share links for collaboration.'],
+      ['Security', 'Passwords are hashed with scrypt, share tokens are stored as hashes, expired/revoked links are rejected, and logout revokes the active token server-side.'],
+      ['Retention', 'You can delete interviews from the dashboard. Database backups and platform logs depend on the deployment provider you configure.'],
+    ] : [
+      ['Acceptable use', 'Use SystemDesign Studio for lawful interview, training, and architecture review workflows. Do not upload secrets or regulated production data.'],
+      ['Shared links', 'Anyone with a valid role link can access that interview role until the link expires or is revoked. Generate fresh links if a link is exposed.'],
+      ['Candidate fairness', 'Interviewer-only hints and ideal solutions are reference tools. They should not auto-generate candidate answers during a live interview.'],
+      ['Availability', 'The hosted service is provided as configured by the operator. Keep backups and monitoring enabled before relying on it for critical hiring loops.'],
+    ];
+    return `
+      <div class="app dashboard">
+        ${this.renderTopbar(kind)}
+        <div class="dashboard-body legal-body">
+          <div class="page-head">
+            <div>
+              <div class="page-title">${privacy ? 'Privacy' : 'Terms'}</div>
+              <div class="subtle">${privacy ? 'How SystemDesign Studio handles workspace data.' : 'Rules for using the shared interview workspace.'}</div>
+            </div>
+            <button class="btn primary" data-action="${this.state.currentUser ? 'dashboard' : 'loginScreen'}">${this.state.currentUser ? 'Back to dashboard' : 'Back to sign in'}</button>
+          </div>
+          <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+            ${rows.map(([title, body]) => `<div class="card stat"><div class="mono-label">${esc(title)}</div><p class="subtle" style="line-height:1.5">${esc(body)}</p></div>`).join('')}
+          </div>
+        </div>
+      </div>`;
+  }
+
   renderDashboard() {
     const user = this.state.currentUser || { name: 'Guest', email: '' };
     const sessions = this.state.sessions;
-    const activeSessions = sessions.filter((session) => session.status !== 'reviewed');
+    const activeSessions = sessions.filter((session) => !['reviewed', 'archived'].includes(session.status));
     const stats = [
       ['Interviews this week', String(sessions.length)],
       ['Avg. duration', sessions.length ? `${Math.round(sessions.reduce((sum, session) => sum + session.duration, 0) / sessions.length)}m` : '0m'],
@@ -1050,14 +1255,21 @@ export class SystemDesignStudio {
 
   renderSessionCard(session) {
     return `
-      <button class="card resume-card" data-action="resumeSession" data-session-id="${esc(session.id)}">
-        <span class="icon-tile" style="color:var(--accent-soft);background:rgba(99,102,241,.18)">${this.icon('monitor', 21)}</span>
-        <span style="text-align:left;flex:1">
-          <strong>${esc(session.title)} - ${esc(session.difficulty)} loop</strong><br>
-          <span class="subtle">Candidate: ${esc(session.candidate.name)} - ${esc(session.duration)}m - ${esc(session.status)}</span>
-        </span>
-        <span style="color:var(--accent-soft);font-weight:700">Resume</span>
-      </button>`;
+      <div class="card resume-card session-card">
+        <button class="session-main" data-action="resumeSession" data-session-id="${esc(session.id)}">
+          <span class="icon-tile" style="color:var(--accent-soft);background:rgba(99,102,241,.18)">${this.icon('monitor', 21)}</span>
+          <span style="text-align:left;flex:1;min-width:0">
+            <strong>${esc(session.title)} - ${esc(session.difficulty)} loop</strong><br>
+            <span class="subtle">Candidate: ${esc(session.candidate.name)} - ${esc(session.duration)}m - ${esc(session.status)}</span>
+          </span>
+          <span style="color:var(--accent-soft);font-weight:700">Open</span>
+        </button>
+        <div class="session-actions">
+          <button class="btn" data-action="openShareLinks" data-session-id="${esc(session.id)}">Share</button>
+          <button class="btn" data-action="archiveSession" data-session-id="${esc(session.id)}">Archive</button>
+          <button class="btn danger" data-action="deleteSession" data-session-id="${esc(session.id)}">Delete</button>
+        </div>
+      </div>`;
   }
 
   renderQuestionCard(question) {
@@ -1081,6 +1293,12 @@ export class SystemDesignStudio {
     const draft = this.state.draft;
     const current = questionById(draft.questionId);
     const spec = QUESTION_SPEC[current.id] || QUESTION_SPEC.twitter;
+    const terms = String(this.state.setupQuery || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const setupQuestions = QUESTIONS.filter((question) => {
+      const haystack = `${question.title} ${question.tagline || ''} ${(question.topics || []).join(' ')}`.toLowerCase();
+      return !terms.length || terms.every((term) => haystack.includes(term));
+    });
+    const busy = Boolean(this.state.setupBusy);
     return `
       <div class="app dashboard">
         ${this.renderTopbar('setup')}
@@ -1091,10 +1309,11 @@ export class SystemDesignStudio {
               <div class="subtle">Configure the question, permissions, diagnostics, and shared blank workspace.</div>
             </div>
             <div style="display:flex;gap:10px">
-              <button class="btn" data-action="workspace" data-question="${esc(draft.questionId)}">Start workspace</button>
-              <button class="btn primary" data-action="generateLink">Generate candidate link</button>
+              <button class="btn" data-action="workspace" data-question="${esc(draft.questionId)}" ${busy ? 'disabled' : ''}>${busy ? 'Creating...' : 'Start workspace'}</button>
+              <button class="btn primary" data-action="generateLink" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate candidate link'}</button>
             </div>
           </div>
+          ${this.state.setupError ? `<div class="auth-error" role="alert" style="margin-bottom:16px">${esc(this.state.setupError)}</div>` : ''}
           <div class="setup-grid">
             <div>
               <div class="form-grid">
@@ -1104,12 +1323,13 @@ export class SystemDesignStudio {
                     <button class="pill pill-button ${draft.questionMode === 'preset' ? 'active' : ''}" data-action="questionMode" data-mode="preset">Preset</button>
                     <button class="pill pill-button ${draft.questionMode === 'custom' ? 'active' : ''}" data-action="questionMode" data-mode="custom">Custom</button>
                   </div>
-                  <div class="grid">
-                    ${QUESTIONS.slice(0, 6).map((question) => `
+                  <input class="field" data-setup-search aria-label="Search question presets" value="${esc(this.state.setupQuery || '')}" placeholder="Search by title or topic">
+                  <div class="grid setup-question-list">
+                    ${setupQuestions.map((question) => `
                       <button class="card stat" data-action="selectSetupQuestion" data-question="${esc(question.id)}" style="text-align:left;border-color:${question.id === draft.questionId ? 'rgba(99,102,241,.45)' : 'var(--border)'}">
                         <strong>${esc(question.title)}</strong>
                         <div class="subtle" style="font-size:12px;margin-top:4px">${esc(question.topics.join(', '))} - ${esc(question.dur)}m</div>
-                      </button>`).join('')}
+                      </button>`).join('') || '<div class="subtle" style="padding:12px">No matching questions.</div>'}
                   </div>
                 </div>
                 <div class="card stat">
@@ -1166,8 +1386,8 @@ export class SystemDesignStudio {
                 ].map(([a, b]) => `<div style="display:flex;justify-content:space-between;font-size:13px"><span class="subtle">${a}</span><strong>${b}</strong></div>`).join('')}
               </div>
               ${this.renderVisibilityMatrix({ permissions: draft.permissions })}
-              <button class="btn primary" style="width:100%;margin-bottom:10px" data-action="generateLink">Generate candidate link</button>
-              <button class="btn" style="width:100%" data-action="workspace" data-question="${esc(draft.questionId)}">Start workspace</button>
+              <button class="btn primary" style="width:100%;margin-bottom:10px" data-action="generateLink" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate candidate link'}</button>
+              <button class="btn" style="width:100%" data-action="workspace" data-question="${esc(draft.questionId)}" ${busy ? 'disabled' : ''}>${busy ? 'Creating...' : 'Start workspace'}</button>
             </aside>
           </div>
         </div>
@@ -1197,6 +1417,8 @@ export class SystemDesignStudio {
     const session = this.activeSession();
     const question = questionById(session?.questionId || this.state.question);
     const links = this.state.shareLinks;
+    const hasLinks = Object.values(links || {}).some(Boolean);
+    const expires = this.state.shareExpiresAt ? new Date(this.state.shareExpiresAt).toLocaleString() : 'Not generated';
     return `
       <div class="app dashboard">
         ${this.renderTopbar('link')}
@@ -1205,11 +1427,15 @@ export class SystemDesignStudio {
             <div class="icon-tile" style="width:48px;height:48px;color:#6ee7b7;background:rgba(52,211,153,.14);margin-bottom:18px">${this.icon('shield', 24)}</div>
             <div class="page-title">Share links generated</div>
             <p class="subtle">These links open the same live workspace. Server-side roles decide who can edit, inspect health, inject failures, and submit review notes.</p>
+            <div class="visibility-card">
+              <div class="visibility-row"><span>Link expiry</span><strong>${esc(expires)}</strong></div>
+              <div class="visibility-row"><span>Regeneration</span><strong>Fresh links revoke older active links</strong></div>
+            </div>
             ${['candidate', 'interviewer', 'panel'].map((role) => `
               <div class="mono-label" style="margin-top:12px">${esc(ROLE_LABELS[role])} invite</div>
               <div style="display:flex;gap:10px;margin:8px 0 10px">
                 <input class="field" data-role-link="${esc(role)}" readonly value="${esc(links[role] || '')}">
-                <button class="btn" data-action="copyShareLink" data-role="${esc(role)}">Copy</button>
+                <button class="btn" data-action="copyShareLink" data-role="${esc(role)}" ${links[role] ? '' : 'disabled'}>Copy</button>
               </div>`).join('')}
             <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
               ${[
@@ -1219,8 +1445,10 @@ export class SystemDesignStudio {
               ].map(([a, b]) => `<div class="card stat"><div class="subtle">${esc(a)}</div><strong>${esc(b)}</strong></div>`).join('')}
             </div>
             ${this.renderVisibilityMatrix(session)}
-            <div style="display:flex;gap:10px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
               <button class="btn" style="flex:1" data-action="setup">Edit setup</button>
+              <button class="btn" style="flex:1" data-action="regenerateShareLinks" ${this.state.shareBusy ? 'disabled' : ''}>${this.state.shareBusy ? 'Generating...' : 'Generate fresh links'}</button>
+              <button class="btn danger" style="flex:1" data-action="revokeShareLinks" ${!hasLinks || this.state.shareBusy ? 'disabled' : ''}>Revoke links</button>
               <button class="btn primary" style="flex:1" data-action="workspace" data-question="${esc(session?.questionId || this.state.question)}">Start workspace</button>
             </div>
           </div>
@@ -1245,16 +1473,24 @@ export class SystemDesignStudio {
   }
 
   renderCandidateDemo() {
+    const canEdit = this.canEdit();
     return `
       <div class="demo-overlay">
         <div class="demo-card card">
           <div class="pill" style="width:max-content;color:var(--accent-soft)">Candidate walkthrough</div>
-          <div class="page-title" style="font-size:22px;margin-top:12px">Build your design on the shared canvas</div>
+          <div class="page-title" style="font-size:22px;margin-top:12px">${canEdit ? 'Build your design on the shared canvas' : 'Review the question and explain your design'}</div>
           <div class="demo-steps">
-            <div><strong>1</strong><span>Drag components from the palette or click a component to add it.</span></div>
-            <div><strong>2</strong><span>Drag from a component + handle to another component to connect them.</span></div>
-            <div><strong>3</strong><span>Double-click the canvas to add a text box for assumptions and tradeoffs.</span></div>
-            <div><strong>4</strong><span>Your interviewer sees every change in the same live workspace.</span></div>
+            ${canEdit ? `
+              <div><strong>1</strong><span>Drag components from the palette or click a component to add it.</span></div>
+              <div><strong>2</strong><span>Drag from a component + handle to another component to connect them.</span></div>
+              <div><strong>3</strong><span>Double-click the canvas to add a text box for assumptions and tradeoffs.</span></div>
+              <div><strong>4</strong><span>Your interviewer sees every change in the same live workspace.</span></div>
+            ` : `
+              <div><strong>1</strong><span>Review the question panel and talk through the architecture constraints.</span></div>
+              <div><strong>2</strong><span>Select components and connections to inspect what the interviewer has made visible.</span></div>
+              <div><strong>3</strong><span>Call out assumptions, bottlenecks, and tradeoffs verbally during the shared session.</span></div>
+              <div><strong>4</strong><span>The interviewer controls editing, hints, diagnostics, and final scoring.</span></div>
+            `}
           </div>
           <button class="btn primary" style="width:100%;margin-top:18px" data-action="dismissDemo">Start designing</button>
         </div>
@@ -1293,11 +1529,13 @@ export class SystemDesignStudio {
           ${this.canViewAiHints() ? '<button class="btn" data-action="toggleAi">AI hints</button>' : ''}
           ${this.canSubmitReview() ? `<button class="btn ${this.state.idealOpen ? 'active' : ''}" data-action="toggleIdealSolution">Ideal solution</button>` : ''}
           ${this.visibility().canSeeScorecard ? '<button class="btn primary" data-action="review">Finish & review</button>' : ''}`
-        : `
-          <div class="spacer"></div>
-          <button class="btn" data-action="dashboard">Dashboard</button>
-          ${this.state.currentUser ? `<button class="btn" data-action="signOut">Sign out</button>` : ''}
-          ${mode !== 'setup' ? '<button class="btn primary" data-action="setup">Create interview</button>' : ''}`}
+	      : `
+	          <div class="spacer"></div>
+	          <button class="btn optional-wide" data-action="privacy">Privacy</button>
+	          <button class="btn optional-wide" data-action="terms">Terms</button>
+	          ${this.state.currentUser ? '<button class="btn" data-action="dashboard">Dashboard</button>' : '<button class="btn" data-action="loginScreen">Sign in</button>'}
+	          ${this.state.currentUser ? `<button class="btn" data-action="signOut">Sign out</button>` : ''}
+	          ${this.state.currentUser && mode !== 'setup' ? '<button class="btn primary" data-action="setup">Create interview</button>' : ''}`}
       </header>`;
   }
 
@@ -1372,6 +1610,7 @@ export class SystemDesignStudio {
         </div>`;
     return `
       <section class="canvas-wrap" data-canvas>
+        ${this.canEdit() ? this.renderMobileAddBar() : ''}
         ${questionPanel}
         ${this.state.connectionStartId ? '<div class="connection-hint">Choose a target component to create the connection</div>' : ''}
         <div class="canvas-layer" style="transform:translate(${this.state.pan.x}px, ${this.state.pan.y}px) scale(${this.state.zoom || 1})">
@@ -1384,7 +1623,20 @@ export class SystemDesignStudio {
           ${this.renderComments()}
         </div>
         ${this.state.problemsOpen ? this.renderDiagnostics() : ''}
-      </section>`;
+	      </section>`;
+  }
+
+  renderMobileAddBar() {
+    return `
+      <div class="mobile-addbar">
+        <select class="select" data-mobile-add aria-label="Add component">
+          <option value="">Add component...</option>
+          ${PALETTE.map((group) => `
+            <optgroup label="${esc(group.cat)}">
+              ${group.items.map((item) => `<option value="${esc(`${item}|||${group.cat}`)}">${esc(item)}</option>`).join('')}
+            </optgroup>`).join('')}
+        </select>
+      </div>`;
   }
 
   renderNode(component, diagnostics, affected) {
@@ -1713,19 +1965,25 @@ export class SystemDesignStudio {
   }
 
   renderStatusbar() {
+    const presence = { interviewer: 0, candidate: 0, panel: 0, ...(this.state.presence || {}) };
+    const label = (role) => `${ROLE_LABELS[role]} ${presence[role] > 0 ? 'online' : 'offline'}`;
+    const color = (role) => presence[role] > 0 ? 'var(--good)' : 'var(--muted)';
     return `
       <footer class="statusbar">
-        <span style="color:var(--good)">Candidate online</span>
-        <span>Interviewer online</span>
+        <span style="color:${color('candidate')}">${label('candidate')}</span>
+        <span style="color:${color('interviewer')}">${label('interviewer')}</span>
+        ${presence.panel ? `<span style="color:${color('panel')}">${label('panel')}</span>` : ''}
         <span class="status-chip">${this.state.comps.length} nodes - ${this.state.edges.length} links</span>
         <span class="status-chip">Traffic ${this.state.traffic ? 'x' + this.state.traffic : 'baseline'}</span>
         <span class="status-chip">${this.diagnostics().length} diagnostics</span>
         <span class="spacer"></span>
+        <span>Sync: ${esc(this.state.syncState || 'offline')}</span>
         <span>Persistence: ${esc(this.state.saveState)}</span>
       </footer>`;
   }
 
   renderReview() {
+    const active = this.activeSession();
     const metrics = [
       ['Components', this.state.comps.length],
       ['Connections', this.state.edges.length],
@@ -1758,6 +2016,8 @@ export class SystemDesignStudio {
               <div class="card stat"><div class="subtle">Missing reference components</div><strong>${idealAssessment.missing.slice(0, 4).join(', ') || 'None'}</strong></div>
               <div class="card stat"><div class="subtle">Critical diagnostics</div><strong>${idealAssessment.criticals}</strong></div>
             </div>
+            <div class="section-head"><div><div class="section-title">Event timeline</div><div class="subtle">Server-recorded interview activity.</div></div></div>
+            ${this.renderEventTimeline(active)}
           </main>
           <aside class="review-side">
             ${canSeeScorecard ? `
@@ -1776,6 +2036,25 @@ export class SystemDesignStudio {
             </div>` : this.renderRestrictedReviewPanel()}
           </aside>
         </div>
+      </div>`;
+  }
+
+  renderEventTimeline(session) {
+    const fallback = [
+      { kind: 'created', role: 'interviewer', summary: 'Interview workspace created', createdAt: session?.createdAt },
+      { kind: session?.status === 'reviewed' ? 'reviewed' : 'updated', role: 'interviewer', summary: session?.status === 'reviewed' ? 'Final review submitted' : 'Latest workspace state saved', createdAt: session?.updatedAt },
+    ].filter((event) => event.createdAt);
+    const events = (session?.events?.length ? session.events : fallback).slice(0, 8);
+    return `
+      <div class="timeline">
+        ${events.map((event) => `
+          <div class="timeline-item">
+            <span class="timeline-dot"></span>
+            <div>
+              <div style="display:flex;justify-content:space-between;gap:12px"><strong>${esc(event.summary)}</strong><span class="mono-label">${esc(event.role || event.kind)}</span></div>
+              <div class="subtle" style="font-size:12px;margin-top:4px">${esc(event.createdAt ? new Date(event.createdAt).toLocaleString() : '')}</div>
+            </div>
+          </div>`).join('')}
       </div>`;
   }
 
@@ -1806,9 +2085,12 @@ export class SystemDesignStudio {
     if (target.disabled) return;
     const action = target.dataset.action;
     if (action === 'authMode') this.setState({ authMode: target.dataset.mode });
+    if (action === 'privacy') this.setState({ screen: 'privacy' });
+    if (action === 'terms') this.setState({ screen: 'terms' });
+    if (action === 'loginScreen') this.setState({ screen: 'login' });
     if (action === 'togglePasswordVisibility') this.togglePasswordVisibility();
     if (action === 'signIn') await this.signIn();
-    if (action === 'signOut') this.signOut();
+    if (action === 'signOut') await this.signOut();
     if (action === 'dashboard') {
       this.closeSharedSocket();
       this.setState({ screen: 'dashboard' });
@@ -1828,6 +2110,9 @@ export class SystemDesignStudio {
       const session = this.state.sessions.find((item) => item.id === target.dataset.sessionId);
       if (session) this.openWorkspace(session.questionId, { sessionId: session.id, role: 'interviewer' });
     }
+    if (action === 'openShareLinks') await this.openShareLinks(target.dataset.sessionId);
+    if (action === 'archiveSession') await this.archiveSession(target.dataset.sessionId);
+    if (action === 'deleteSession') await this.deleteSession(target.dataset.sessionId);
     if (action === 'acceptInvite') {
       const invite = this.state.pendingInvite;
       if (invite) this.openWorkspace(invite.session.questionId, { sessionId: invite.session.id, role: invite.role });
@@ -1849,6 +2134,8 @@ export class SystemDesignStudio {
       const session = await this.persistSessionFromSetup();
       if (session) this.setState({ screen: 'link' });
     }
+    if (action === 'regenerateShareLinks') await this.openShareLinks(this.state.activeSessionId);
+    if (action === 'revokeShareLinks') await this.revokeShareLinks();
     if (action === 'copyLink') await this.copyText(this.state.candidateLink, 'Candidate link copied');
     if (action === 'copyShareLink') await this.copyText(this.state.shareLinks[target.dataset.role], `${ROLE_LABELS[target.dataset.role]} link copied`);
     if (action === 'review' && this.visibility().canSeeScorecard) this.setState({ screen: 'review' });
@@ -1938,8 +2225,13 @@ export class SystemDesignStudio {
     this.setState({ demoOpen: false, demoDismissed: true });
   }
 
-  signOut() {
+  async signOut() {
     this.closeSharedSocket();
+    try {
+      if (typeof this.api.logout === 'function' && this.api.token?.()) await this.api.logout();
+    } catch {
+      // Local sign-out should still complete if the network is unavailable.
+    }
     this.api.setToken('');
     try {
       this.storage?.removeItem(STORAGE_KEYS.user);
@@ -2059,6 +2351,12 @@ export class SystemDesignStudio {
       this.state.authDetails = {};
       return;
     }
+    const setupSearch = event.target.closest('[data-setup-search]');
+    if (setupSearch) {
+      this.state.setupQuery = setupSearch.value;
+      this.render();
+      return;
+    }
     const sessionField = event.target.closest('[data-session-field]');
     if (sessionField) {
       const value = sessionField.dataset.sessionField === 'duration' ? Number(sessionField.value) : sessionField.value;
@@ -2092,6 +2390,13 @@ export class SystemDesignStudio {
     if (sessionField) {
       const value = sessionField.dataset.sessionField === 'duration' ? Number(sessionField.value) : sessionField.value;
       this.setState({ draft: { ...this.state.draft, [sessionField.dataset.sessionField]: value } });
+      return;
+    }
+    const mobileAdd = event.target.closest('[data-mobile-add]');
+    if (mobileAdd && mobileAdd.value) {
+      const [name, cat] = mobileAdd.value.split('|||');
+      this.addComponent(name, cat);
+      mobileAdd.value = '';
       return;
     }
     const field = event.target.closest('[data-field]');
@@ -2356,18 +2661,7 @@ export class SystemDesignStudio {
   }
 
   addCanvasComment(x, y) {
-    const text = typeof window !== 'undefined' && typeof window.prompt === 'function'
-      ? window.prompt('Add architecture comment', 'Investigate this tradeoff')
-      : 'Investigate this tradeoff';
-    if (!text) return;
-    const comment = {
-      id: `note-${Date.now()}`,
-      x: Math.round(x),
-      y: Math.round(y),
-      text: String(text).trim(),
-    };
-    this.setState({ comments: [...this.state.comments, comment] });
-    void this.persistArchitecture();
+    this.addTextBox(x, y);
   }
 
   addTextBox(x, y) {

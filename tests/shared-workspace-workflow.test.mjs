@@ -5,6 +5,7 @@ import {
   createDefaultDraft,
   createSessionFromDraft,
 } from '../public/app.js';
+import { QUESTIONS } from '../public/sds-data.js';
 
 function root() {
   return { innerHTML: '', addEventListener() {} };
@@ -617,6 +618,234 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
 }
 
 {
+  const local = storage();
+  const draft = createDefaultDraft(owner, 'payment');
+  const session = createSessionFromDraft({ user: owner, draft, questionId: 'payment' });
+  session.permissions = { ...session.permissions, allowCandidateEdit: false };
+  const app = new SystemDesignStudio(root(), {
+    storage: local,
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.sessions = [session];
+  app.state.activeSessionId = session.id;
+  app.state.visibility = {
+    canSeeQuestion: true,
+    canSeeArchitecture: true,
+    canEditCanvas: false,
+    canSeeHealth: false,
+    canInjectFailures: false,
+    canSeeAiHints: false,
+    canSeeScorecard: false,
+  };
+
+  app.openWorkspace('payment', { sessionId: session.id, role: 'candidate' });
+
+  assert.equal(app.renderCandidateDemo().includes('Review the question'), true);
+  assert.equal(app.renderCandidateDemo().includes('Drag components from the palette'), false);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.currentUser = owner;
+  app.state.draft = createDefaultDraft(owner, 'payment');
+  app.state.setupQuery = '';
+
+  const setup = app.renderSetup();
+
+  assert.equal(setup.includes('data-setup-search'), true);
+  for (const question of QUESTIONS) {
+    assert.equal(setup.includes(question.title), true, `Expected setup to include ${question.title}`);
+  }
+
+  app.state.setupQuery = 'payment ledger';
+  const filtered = app.renderSetup();
+  assert.equal(filtered.includes('Design Payment System'), true);
+  assert.equal(filtered.includes('Design Twitter'), false);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  const session = createSessionFromDraft({ user: owner, draft: createDefaultDraft(owner, 'payment'), questionId: 'payment' });
+
+  const card = app.renderSessionCard(session);
+
+  assert.equal(card.includes('data-action="resumeSession"'), true);
+  assert.equal(card.includes('data-action="openShareLinks"'), true);
+  assert.equal(card.includes('data-action="archiveSession"'), true);
+  assert.equal(card.includes('data-action="deleteSession"'), true);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.presence = { candidate: 1, interviewer: 0, panel: 0 };
+  app.state.syncState = 'live';
+
+  const status = app.renderStatusbar();
+
+  assert.equal(status.includes('Candidate online'), true);
+  assert.equal(status.includes('Interviewer offline'), true);
+  assert.equal(status.includes('Sync: live'), true);
+  assert.equal(status.includes('Persistence: idle'), true);
+}
+
+{
+  const draft = createDefaultDraft(owner, 'payment');
+  const session = createSessionFromDraft({ user: owner, draft, questionId: 'payment' });
+  const openedSockets = [];
+  class FakeWebSocket {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 1;
+      this.listeners = {};
+      openedSockets.push(this);
+    }
+
+    addEventListener(type, listener) {
+      this.listeners[type] = listener;
+    }
+
+    close() {
+      this.readyState = 3;
+    }
+  }
+
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    WebSocket: FakeWebSocket,
+    api: {
+      baseUrl: 'https://api.example.test',
+      token() {
+        return 'owner-token';
+      },
+      async interviews() {
+        return { interviews: [session] };
+      },
+    },
+  });
+  app.state.sessions = [session];
+  app.state.activeSessionId = session.id;
+
+  app.openWorkspace('payment', { sessionId: session.id, role: 'interviewer' });
+  openedSockets[0].listeners.message({
+    data: JSON.stringify({
+      type: 'connected',
+      role: 'interviewer',
+      presence: { interviewer: 1, candidate: 0, panel: 0 },
+    }),
+  });
+
+  assert.equal(app.state.syncState, 'live');
+  assert.deepEqual(app.state.presence, { interviewer: 1, candidate: 0, panel: 0 });
+
+  openedSockets[0].listeners.message({
+    data: JSON.stringify({
+      type: 'presence.updated',
+      presence: { interviewer: 1, candidate: 1, panel: 0 },
+    }),
+  });
+  assert.equal(app.state.presence.candidate, 1);
+}
+
+{
+  let expectedTimestamp = '';
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      async updateInterview(id, body) {
+        expectedTimestamp = body.expectedUpdatedAt;
+        return {
+          interview: {
+            ...app.activeSession(),
+            architecture: body.architecture,
+            updatedAt: '2026-07-03T08:10:00.000Z',
+          },
+        };
+      },
+    },
+  });
+  const session = createSessionFromDraft({ user: owner, draft: createDefaultDraft(owner, 'payment'), questionId: 'payment' });
+  session.updatedAt = '2026-07-03T08:00:00.000Z';
+  app.state.sessions = [session];
+  app.state.activeSessionId = session.id;
+  app.state.comps = [{ id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 }];
+
+  await app.persistArchitecture();
+
+  assert.equal(expectedTimestamp, '2026-07-03T08:00:00.000Z');
+  assert.equal(app.state.saveState, 'saved');
+}
+
+{
+  const serverSession = createSessionFromDraft({ user: owner, draft: createDefaultDraft(owner, 'payment'), questionId: 'payment' });
+  serverSession.updatedAt = '2026-07-03T08:12:00.000Z';
+  serverSession.architecture = {
+    comps: [{ id: 'server-api', type: 'Server API', cat: 'Compute', x: 100, y: 120 }],
+    edges: [],
+    comments: [],
+  };
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      async updateInterview() {
+        const error = new Error('Interview changed since you loaded it');
+        error.status = 409;
+        error.current = serverSession;
+        throw error;
+      },
+    },
+  });
+  const localSession = createSessionFromDraft({ user: owner, draft: createDefaultDraft(owner, 'payment'), questionId: 'payment' });
+  localSession.id = serverSession.id;
+  localSession.updatedAt = '2026-07-03T08:00:00.000Z';
+  app.state.sessions = [localSession];
+  app.state.activeSessionId = localSession.id;
+  app.state.screen = 'workspace';
+  app.state.comps = [{ id: 'local-api', type: 'Local API', cat: 'Compute', x: 100, y: 120 }];
+
+  await app.persistArchitecture();
+
+  assert.equal(app.state.saveState, 'conflict');
+  assert.equal(app.state.comps[0].id, 'server-api');
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      async updateInterview() {
+        throw new Error('Review should not save without feedback');
+      },
+    },
+  });
+  const session = createSessionFromDraft({ user: owner, draft: createDefaultDraft(owner, 'payment'), questionId: 'payment' });
+  app.state.sessions = [session];
+  app.state.activeSessionId = session.id;
+  app.state.reviewFeedback = 'too short';
+
+  await app.saveReview('advance');
+
+  assert.equal(app.state.reviewDecision, '');
+  assert.equal(app.state.toast, 'Add specific feedback before submitting the review');
+}
+
+{
   const app = new SystemDesignStudio(root(), {
     storage: storage(),
     location: new URL('https://studio.example.test/'),
@@ -718,4 +947,24 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
   assert.equal(app.state.zoom, 1.1);
   assert.equal(app.state.pan.x, -20);
   assert.equal(app.state.pan.y, -10);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.tool = 'comment';
+  const { target } = canvasTarget();
+
+  app.handleCanvasClick({
+    clientX: 240,
+    clientY: 180,
+    target,
+  });
+
+  assert.equal(app.state.comments.length, 1);
+  assert.equal(app.state.comments[0].text, '');
 }

@@ -9,7 +9,8 @@ SystemDesign Studio is a production architecture simulator for system design int
 - User-specific interview dashboard
 - Server-backed candidate/interviewer/panel invite links
 - One shared live workspace with role-specific permissions for candidates, interviewers, and panels
-- Authenticated WebSocket sync for shared workspace updates, with polling fallback
+- Authenticated WebSocket sync for shared workspace updates and presence, with polling fallback
+- Expiring/revocable share links and stale-write conflict protection
 - Interactive architecture workspace
 - Drag-and-drop component palette
 - Selectable nodes and edges
@@ -120,11 +121,10 @@ This repo now has a real backend-compatible launch path:
 - Keep `SDS_TOKEN_SECRET` private and rotate it before production traffic.
 - Point GitHub Pages `public/runtime-config.js` at the deployed API, or serve the frontend from the Node API for same-origin deployment.
 - Keep GitHub Pages for the frontend only; it cannot provide server-side auth, durable storage, or role enforcement by itself.
+- Use the in-app Privacy and Terms pages as product defaults, then replace the copy with counsel-reviewed language before high-scale public marketing.
 
 Before broad public launch, add:
 
 - Managed Postgres or another hosted database instead of SQLite if multiple app instances are needed
 - Email verification and password reset
-- Privacy policy and terms pages
 - Error monitoring and analytics
-- Abuse protection on public sharing routes

@@ -93,7 +93,17 @@ try {
 
   const wsBase = app.baseUrl.replace(/^http:/, 'ws:');
   const ownerSocket = await openSocket(`${wsBase}/api/ws/interviews/${created.json.interview.id}?auth=${encodeURIComponent(signup.json.token)}`);
+  const ownerConnected = await waitForMessage(ownerSocket, (payload) => payload.type === 'connected');
+  assert.equal(ownerConnected.role, 'interviewer');
+  assert.equal(ownerConnected.presence.interviewer, 1);
+  assert.equal(ownerConnected.presence.candidate, 0);
+
+  const candidatePresence = waitForMessage(ownerSocket, (payload) => payload.type === 'presence.updated' && payload.presence.candidate === 1);
   const candidateSocket = await openSocket(`${wsBase}/api/ws/interviews/${created.json.interview.id}?share=${encodeURIComponent(share.json.tokens.candidate)}`);
+  const candidateConnected = await waitForMessage(candidateSocket, (payload) => payload.type === 'connected');
+  assert.equal(candidateConnected.role, 'candidate');
+  assert.equal(candidateConnected.presence.candidate, 1);
+  await candidatePresence;
 
   const updateMessage = waitForMessage(ownerSocket, (payload) => payload.type === 'interview.updated');
   const edited = await request(app.baseUrl, 'PATCH', `/api/share/${share.json.tokens.candidate}`, {
