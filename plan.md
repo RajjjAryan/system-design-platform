@@ -16,12 +16,13 @@ GitHub Pages can host the frontend only. Login, durable interviews, share links,
 
 - Password signup/login through `/api/auth/signup` and `/api/auth/login`.
 - User-specific interview list through `/api/interviews`.
-- Interview creation with question, candidate, permissions, initial architecture, and score state.
-- Server-issued candidate, interviewer, and panel share tokens.
+- Interview creation with question, candidate, permissions, blank architecture state, and score state.
+- Server-issued candidate, interviewer, and panel invite tokens for the same workspace.
 - Role-specific share loading through `/api/share/:token`.
 - Candidate edit enforcement through `PATCH /api/share/:token`.
 - Owner updates through `PATCH /api/interviews/:id`.
-- Canvas editing with drag/drop components, editable inspectors, edges, comments, pan, connect mode, and persisted architecture.
+- Authenticated WebSocket subscriptions through `/api/ws/interviews/:id` for realtime shared-workspace invalidation.
+- Canvas editing with drag/drop components, editable inspectors, edges, comments, pan, connect mode, shared refresh, and persisted architecture.
 - Palette search.
 - Dynamic diagnostics and AI interviewer hints derived from the current architecture.
 - Review mode with persisted scores, decision, and feedback.

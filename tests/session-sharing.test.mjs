@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { QUESTIONS, QUESTION_SPEC } from '../public/sds-data.js';
 import {
-  buildShareUrl,
   createDefaultDraft,
   createInitialState,
   createSessionFromDraft,
-  parseSharedInvite,
 } from '../public/app.js';
 
 function memoryStorage(seed = {}) {
@@ -34,6 +33,9 @@ for (const question of QUESTIONS) {
   assert.ok(spec.followups.length >= 2, `Expected ${question.id} interviewer follow-ups`);
 }
 
+const appSource = readFileSync('public/app.js', 'utf8');
+assert.doesNotMatch(appSource, /buildShareUrl|parseSharedInvite|invite=/);
+
 const owner = { name: 'Neha Rao', email: 'neha@example.com' };
 const draft = createDefaultDraft(owner, 'payment');
 draft.candidateName = 'Sam Lee';
@@ -49,20 +51,6 @@ assert.equal(session.questionId, 'payment');
 assert.equal(session.permissions.showHealthToCandidate, false);
 assert.equal(session.permissions.allowCandidateEdit, true);
 assert.doesNotMatch(session.title, /Twitter|Priya/i);
-
-const candidateUrl = buildShareUrl({
-  baseUrl: 'https://rajjjaryan.github.io/system-design-platform/',
-  role: 'candidate',
-  session,
-});
-
-assert.match(candidateUrl, /^https:\/\/rajjjaryan\.github\.io\/system-design-platform\/\?role=candidate&invite=/);
-
-const parsed = parseSharedInvite(new URL(candidateUrl));
-assert.equal(parsed.role, 'candidate');
-assert.equal(parsed.session.id, session.id);
-assert.equal(parsed.session.questionId, 'payment');
-assert.equal(parsed.session.candidate.name, 'Sam Lee');
 
 const anonymousState = createInitialState({
   location: new URL('https://rajjjaryan.github.io/system-design-platform/'),
@@ -81,10 +69,20 @@ assert.equal(signedInState.screen, 'dashboard');
 assert.equal(signedInState.currentUser.name, 'Neha Rao');
 assert.equal(signedInState.sessions[0].questionId, 'payment');
 
-const invitedState = createInitialState({
-  location: new URL(candidateUrl),
+const sharedTokenState = createInitialState({
+  location: new URL('https://rajjjaryan.github.io/system-design-platform/?share=server-token-123'),
   storage: memoryStorage(),
 });
-assert.equal(invitedState.screen, 'login');
-assert.equal(invitedState.pendingInvite.role, 'candidate');
-assert.equal(invitedState.pendingInvite.session.questionId, 'payment');
+assert.equal(sharedTokenState.screen, 'login');
+assert.equal(sharedTokenState.pendingShareToken, 'server-token-123');
+assert.equal(sharedTokenState.pendingInvite, null);
+
+const signedInSharedTokenState = createInitialState({
+  location: new URL('https://rajjjaryan.github.io/system-design-platform/?share=server-token-123'),
+  storage: memoryStorage({
+    'sds.currentUser': JSON.stringify(owner),
+    'sds.sessions': JSON.stringify([session]),
+  }),
+});
+assert.equal(signedInSharedTokenState.screen, 'join');
+assert.equal(signedInSharedTokenState.pendingShareToken, 'server-token-123');

@@ -112,6 +112,45 @@ function verifyToken(token, secret) {
   return payload;
 }
 
+function websocketFrame(payload, opcode = 0x1) {
+  const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
+  const length = data.length;
+  if (length < 126) {
+    return Buffer.concat([Buffer.from([0x80 | opcode, length]), data]);
+  }
+  if (length < 65536) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(length, 2);
+    return Buffer.concat([header, data]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x80 | opcode;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(length), 2);
+  return Buffer.concat([header, data]);
+}
+
+function websocketAcceptKey(key) {
+  return createHash('sha1')
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest('base64');
+}
+
+function websocketSend(socket, payload) {
+  if (!socket.destroyed && socket.writable) {
+    socket.write(websocketFrame(JSON.stringify(payload)));
+  }
+}
+
+function websocketClose(socket) {
+  if (!socket.destroyed) {
+    socket.write(websocketFrame(Buffer.alloc(0), 0x8));
+    socket.end();
+  }
+}
+
 function initDb(dbPath) {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -246,16 +285,23 @@ function visibilityFor(role, permissions) {
   };
 }
 
-function authUser(req, db, tokenSecret) {
-  const header = req.headers.authorization || '';
-  const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const cookieToken = Object.fromEntries(String(req.headers.cookie || '')
+function userFromToken(token, db, tokenSecret) {
+  const payload = verifyToken(token, tokenSecret);
+  if (!payload?.sub) return null;
+  return userRow(db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub));
+}
+
+function cookieToken(req) {
+  return Object.fromEntries(String(req.headers.cookie || '')
     .split(';')
     .map((part) => part.trim().split('=')))
     .sds_token;
-  const payload = verifyToken(bearer || cookieToken, tokenSecret);
-  if (!payload?.sub) return null;
-  return userRow(db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub));
+}
+
+function authUser(req, db, tokenSecret) {
+  const header = req.headers.authorization || '';
+  const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
+  return userFromToken(bearer || cookieToken(req), db, tokenSecret);
 }
 
 function requireAuth(req, db, tokenSecret) {
@@ -484,6 +530,7 @@ async function routeApi(req, res, context) {
       user.id,
     );
     const next = db.prepare('SELECT * FROM interviews WHERE id = ?').get(interviewId);
+    context.broadcastInterviewUpdate(interviewId, updated.updatedAt);
     json(res, 200, { interview: interviewRow(next, 'interviewer') }, cors);
     return;
   }
@@ -540,6 +587,7 @@ async function routeApi(req, res, context) {
       const updatedAt = new Date().toISOString();
       db.prepare('UPDATE interviews SET architecture_json = ?, scores_json = ?, review_json = ?, status = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(architecture), JSON.stringify(scores), JSON.stringify(review), status, updatedAt, share.id);
+      context.broadcastInterviewUpdate(share.id, updatedAt);
       const next = db.prepare(`
         SELECT share_tokens.role, interviews.*
         FROM share_tokens
@@ -562,6 +610,71 @@ async function routeApi(req, res, context) {
   }
 
   json(res, 404, { error: 'Route not found' }, cors);
+}
+
+function authorizeWebSocket(req, interviewId, context) {
+  const { db, tokenSecret } = context;
+  const url = new URL(req.url, 'http://localhost');
+  const shareToken = url.searchParams.get('share') || '';
+  if (shareToken) {
+    const share = db.prepare('SELECT interview_id FROM share_tokens WHERE token_hash = ?').get(hashToken(shareToken));
+    return share?.interview_id === interviewId;
+  }
+
+  const authToken = url.searchParams.get('auth') || cookieToken(req) || '';
+  const user = userFromToken(authToken, db, tokenSecret);
+  if (!user) return false;
+  const row = db.prepare('SELECT id FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+  return Boolean(row);
+}
+
+function handleWebSocketUpgrade(req, socket, head, context) {
+  const url = new URL(req.url, 'http://localhost');
+  const match = url.pathname.match(/^\/api\/ws\/interviews\/([^/]+)$/);
+  const key = req.headers['sec-websocket-key'];
+  if (!match || !key || req.headers.upgrade?.toLowerCase() !== 'websocket') {
+    socket.destroy();
+    return;
+  }
+
+  const interviewId = decodeURIComponent(match[1]);
+  if (!authorizeWebSocket(req, interviewId, context)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  socket.write([
+    'HTTP/1.1 101 Switching Protocols',
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    `Sec-WebSocket-Accept: ${websocketAcceptKey(key)}`,
+    '\r\n',
+  ].join('\r\n'));
+  if (head?.length) socket.unshift(head);
+
+  let sockets = context.webSockets.get(interviewId);
+  if (!sockets) {
+    sockets = new Set();
+    context.webSockets.set(interviewId, sockets);
+  }
+  sockets.add(socket);
+
+  websocketSend(socket, { type: 'connected', interviewId });
+
+  socket.on('data', (buffer) => {
+    const opcode = buffer[0] & 0x0f;
+    if (opcode === 0x8) websocketClose(socket);
+    if (opcode === 0x9) socket.write(websocketFrame(Buffer.alloc(0), 0x0a));
+  });
+  socket.on('close', () => {
+    sockets.delete(socket);
+    if (!sockets.size) context.webSockets.delete(interviewId);
+  });
+  socket.on('error', () => {
+    sockets.delete(socket);
+    if (!sockets.size) context.webSockets.delete(interviewId);
+  });
 }
 
 function serveStatic(req, res) {
@@ -587,9 +700,17 @@ export function createApiServer(options = {}) {
     db,
     publicOrigin: options.publicOrigin || process.env.SDS_PUBLIC_ORIGIN || 'http://127.0.0.1:8787/',
     tokenSecret: resolveTokenSecret(options),
+    webSockets: new Map(),
+    broadcastInterviewUpdate(interviewId, updatedAt) {
+      const sockets = this.webSockets.get(interviewId);
+      if (!sockets?.size) return;
+      for (const socket of sockets) {
+        websocketSend(socket, { type: 'interview.updated', interviewId, updatedAt });
+      }
+    },
   };
 
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       if (req.url.startsWith('/api/')) {
         await routeApi(req, res, context);
@@ -605,6 +726,10 @@ export function createApiServer(options = {}) {
       json(res, status, { error: status >= 500 ? 'Internal server error' : error.message }, corsHeaders(req, context.publicOrigin));
     }
   });
+  server.on('upgrade', (req, socket, head) => {
+    handleWebSocketUpgrade(req, socket, head, context);
+  });
+  return server;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

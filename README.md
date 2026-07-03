@@ -7,8 +7,9 @@ SystemDesign Studio is a production architecture simulator for system design int
 - Public dashboard and create-interview flow
 - Password signup/login backed by the Node API
 - User-specific interview dashboard
-- Server-backed candidate/interviewer/panel share links
-- Role-specific screen visibility for candidates, interviewers, and panels
+- Server-backed candidate/interviewer/panel invite links
+- One shared live workspace with role-specific permissions for candidates, interviewers, and panels
+- Authenticated WebSocket sync for shared workspace updates, with polling fallback
 - Interactive architecture workspace
 - Drag-and-drop component palette
 - Selectable nodes and edges
@@ -29,7 +30,7 @@ public/
   runtime-config.js Frontend API origin configuration
   styles.css        Product UI system
   app.js            Vanilla JS single-page application
-  sds-data.js       Component palette, full question specs, seed architecture
+  sds-data.js       Component palette and full question specs
   sds-knowledge.js  Inspector schemas, metrics, cost, diagnostics, scoring
 server/
   api-server.mjs    Node API + static server for full product mode

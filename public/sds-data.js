@@ -1,4 +1,4 @@
-// SystemDesign Studio — static data: palette, icon glyphs, preset questions, seed canvas.
+// SystemDesign Studio — static data: palette, icon glyphs, and preset questions.
 
 // --- Icon glyphs (24x24). Each: {d: innerSVG, fill: bool} ---
 export const ICONS = {
@@ -450,35 +450,6 @@ const QUESTION_DETAILS = {
 export const QUESTION_SPEC = Object.fromEntries(
   QUESTIONS.map((question) => [question.id, QUESTION_DETAILS[question.id]]),
 );
-
-// seed architecture placed on the canvas for the Twitter question
-export const SEED = {
-  comps: [
-    { id:'c1', type:'Mobile App',      cat:'Frontend', x:60,  y:150, w:150 },
-    { id:'c2', type:'CDN',             cat:'Infrastructure', x:60, y:360, w:150 },
-    { id:'c3', type:'API Gateway',     cat:'API',      x:300, y:150, w:150 },
-    { id:'c4', type:'Load Balancer',   cat:'API',      x:300, y:340, w:150 },
-    { id:'c5', type:'Tweet Service',   base:'Service', cat:'Compute', x:560, y:120, w:160 },
-    { id:'c6', type:'Timeline Service',base:'Service', cat:'Compute', x:560, y:330, w:160 },
-    { id:'c7', type:'Redis',           cat:'Storage',  x:830, y:120, w:150 },
-    { id:'c8', type:'Cassandra',       cat:'Storage',  x:830, y:300, w:150 },
-    { id:'c9', type:'Kafka',           cat:'Messaging',x:830, y:470, w:150 },
-    { id:'c10',type:'S3',              cat:'Storage',  x:300, y:470, w:150 },
-  ],
-  edges: [
-    { id:'e1', from:'c1', to:'c3', protocol:'HTTP', badge:'120K RPS' },
-    { id:'e2', from:'c1', to:'c2', protocol:'HTTP' },
-    { id:'e3', from:'c2', to:'c10', protocol:'HTTP' },
-    { id:'e4', from:'c3', to:'c4', protocol:'HTTP' },
-    { id:'e5', from:'c4', to:'c5', protocol:'gRPC' },
-    { id:'e6', from:'c4', to:'c6', protocol:'gRPC' },
-    { id:'e7', from:'c5', to:'c8', protocol:'TCP', badge:'40K W/s' },
-    { id:'e8', from:'c5', to:'c9', protocol:'Kafka' },
-    { id:'e9', from:'c9', to:'c6', protocol:'Kafka' },
-    { id:'e10',from:'c6', to:'c7', protocol:'Redis', badge:'2M reads/s' },
-    { id:'e11',from:'c6', to:'c8', protocol:'TCP' },
-  ],
-};
 
 // downstream adjacency for failure propagation (who depends ON a broken node)
 export const PROTOCOLS = ['HTTP','gRPC','Kafka','Redis','TCP','Websocket'];

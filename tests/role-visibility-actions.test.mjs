@@ -9,7 +9,6 @@ const requiredSnippets = [
   'data-action="signIn"',
   'data-action="signOut"',
   'data-action="copyShareLink"',
-  'data-action="previewRole"',
   'data-action="acceptInvite"',
   'data-action="authMode"',
   'data-session-field="candidateName"',
@@ -20,8 +19,6 @@ const requiredSnippets = [
   'data-role-link="${esc(role)}"',
   "'candidate'",
   "'interviewer'",
-  'Candidate screen',
-  'Interviewer screen',
   'this.canEdit()',
   'this.canInjectFailures()',
   'this.api.createInterview',
@@ -41,3 +38,4 @@ for (const tool of ['select', 'pan', 'connect', 'comment']) {
 }
 
 assert.doesNotMatch(source, /Good afternoon, Aarav|Candidate: Priya S\.|systemdesign\.studio\/i\//);
+assert.doesNotMatch(source, /data-action="previewRole"|Candidate screen|Interviewer screen|rolePreview/);

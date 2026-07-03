@@ -1,4 +1,4 @@
-import { ICONS, ITEM_ICON, PALETTE, QUESTION_SPEC, QUESTIONS, SEED } from './sds-data.js';
+import { ICONS, ITEM_ICON, PALETTE, QUESTION_SPEC, QUESTIONS } from './sds-data.js';
 import {
   EDGE_PROTOCOLS,
   EDGE_SERIALIZERS,
@@ -167,23 +167,6 @@ function shortId(prefix = 'sds') {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function encodePayload(payload) {
-  const json = JSON.stringify(payload);
-  if (typeof Buffer !== 'undefined') return Buffer.from(json, 'utf8').toString('base64url');
-  const bytes = new TextEncoder().encode(json);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
-}
-
-function decodePayload(value) {
-  if (typeof Buffer !== 'undefined') return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
-  const padded = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4);
-  const binary = atob(padded);
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
-}
-
 function normalizeUser(user) {
   if (!user) return null;
   const email = normalizeEmail(user.email);
@@ -278,39 +261,12 @@ export function createSessionFromDraft({ user, draft, questionId = draft?.questi
   });
 }
 
-export function buildShareUrl({ baseUrl, role, session }) {
-  const url = new URL(baseUrl || 'https://systemdesign.studio/');
-  url.hash = '';
-  url.search = '';
-  url.searchParams.set('role', role || 'candidate');
-  url.searchParams.set('invite', encodePayload({ v: 1, session: normalizeSession(session) }));
-  return url.toString();
-}
-
-export function parseSharedInvite(location) {
-  const url = location instanceof URL ? location : new URL(location?.href || String(location || 'https://systemdesign.studio/'));
-  const invite = url.searchParams.get('invite');
-  if (!invite) return null;
-  try {
-    const payload = decodePayload(invite);
-    const session = normalizeSession(payload.session || payload);
-    if (!session) return null;
-    return {
-      role: url.searchParams.get('role') || payload.role || 'candidate',
-      session,
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function createInitialState({ storage, location } = {}) {
   const currentUser = normalizeUser(readStorage(storage, STORAGE_KEYS.user, null));
   const sessions = readStorage(storage, STORAGE_KEYS.sessions, []).map(normalizeSession).filter(Boolean);
   const url = location instanceof URL ? location : new URL(location?.href || String(location || 'https://systemdesign.studio/'));
-  const pendingInvite = parseSharedInvite(url);
   const pendingShareToken = url.searchParams.get('share') || '';
-  const activeSession = pendingInvite?.session || sessions[0] || null;
+  const activeSession = sessions[0] || null;
   const question = activeSession?.questionId || 'twitter';
   const draft = createDefaultDraft(currentUser, question);
   if (activeSession) {
@@ -324,17 +280,16 @@ export function createInitialState({ storage, location } = {}) {
   }
 
   return {
-    screen: currentUser ? ((pendingInvite || pendingShareToken) ? 'join' : 'dashboard') : 'login',
+    screen: currentUser ? (pendingShareToken ? 'join' : 'dashboard') : 'login',
     currentUser,
     authMode: 'signup',
     login: currentUser ? { name: currentUser.name, email: currentUser.email, password: '' } : { ...DEFAULT_LOGIN, password: '' },
-    pendingInvite,
+    pendingInvite: null,
     pendingShareToken,
     visibility: null,
-    sessions: pendingInvite ? [pendingInvite.session, ...sessions.filter((session) => session.id !== pendingInvite.session.id)] : sessions,
+    sessions,
     activeSessionId: activeSession?.id || null,
-    role: pendingInvite?.role || 'interviewer',
-    rolePreview: null,
+    role: 'interviewer',
     draft,
     question,
     shareLinks: {},
@@ -381,8 +336,13 @@ export class SystemDesignStudio {
     this.location = options.location || (typeof window !== 'undefined' ? window.location : new URL('https://systemdesign.studio/'));
     this.navigator = options.navigator || (typeof window !== 'undefined' ? window.navigator : null);
     this.api = options.api || new ApiClient({ baseUrl: options.apiBaseUrl, storage: this.storage });
+    this.WebSocket = options.WebSocket || (typeof window !== 'undefined' ? window.WebSocket : null);
     this.state = createInitialState({ storage: this.storage, location: this.location });
     this.drag = null;
+    this.syncTimer = null;
+    this.sharedSocket = null;
+    this.sharedSocketUrl = '';
+    this.reconnectTimer = null;
   }
 
   mount() {
@@ -399,6 +359,7 @@ export class SystemDesignStudio {
     window.addEventListener('pointerup', () => { void this.handlePointerUp(); });
     this.render();
     void this.bootstrapFromApi();
+    this.startSharedSync();
   }
 
   setState(patch) {
@@ -412,6 +373,10 @@ export class SystemDesignStudio {
     url.search = '';
     url.hash = '';
     return url.toString();
+  }
+
+  apiOrigin() {
+    return this.api?.baseUrl || runtimeConfig.apiBaseUrl || this.baseUrl();
   }
 
   saveUser(user) {
@@ -459,6 +424,89 @@ export class SystemDesignStudio {
     }
   }
 
+  startSharedSync() {
+    if (typeof window === 'undefined' || typeof window.setInterval !== 'function') return;
+    if (this.syncTimer) window.clearInterval(this.syncTimer);
+    this.syncTimer = window.setInterval(() => {
+      void this.refreshActiveSession();
+    }, 2500);
+  }
+
+  webSocketUrl(session = this.activeSession()) {
+    if (!session?.id || !this.WebSocket) return '';
+    const url = new URL(this.apiOrigin());
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = `/api/ws/interviews/${encodeURIComponent(session.id)}`;
+    url.hash = '';
+    url.search = '';
+    if (this.state.pendingShareToken) {
+      url.searchParams.set('share', this.state.pendingShareToken);
+    } else if (typeof this.api.token === 'function' && this.api.token()) {
+      url.searchParams.set('auth', this.api.token());
+    } else {
+      return '';
+    }
+    return url.toString();
+  }
+
+  closeSharedSocket() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (!this.sharedSocket) return;
+    const socket = this.sharedSocket;
+    this.sharedSocket = null;
+    this.sharedSocketUrl = '';
+    try {
+      socket.close();
+    } catch {
+      // Socket may already be closed.
+    }
+  }
+
+  scheduleSharedSocketReconnect() {
+    if (this.reconnectTimer || !['workspace', 'review'].includes(this.state.screen)) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectSharedSocket();
+    }, 1500);
+  }
+
+  connectSharedSocket() {
+    const url = this.webSocketUrl();
+    if (!url) return;
+    if (this.sharedSocket && this.sharedSocketUrl === url && this.sharedSocket.readyState <= 1) return;
+    this.closeSharedSocket();
+    try {
+      const socket = new this.WebSocket(url);
+      this.sharedSocket = socket;
+      this.sharedSocketUrl = url;
+      socket.addEventListener('message', (event) => {
+        const payload = safeJsonParse(event.data, null);
+        if (payload?.type === 'interview.updated' && payload.interviewId === this.state.activeSessionId) {
+          void this.refreshActiveSession({ force: true });
+        }
+      });
+      socket.addEventListener('close', () => {
+        if (this.sharedSocket === socket) {
+          this.sharedSocket = null;
+          this.sharedSocketUrl = '';
+          this.scheduleSharedSocketReconnect();
+        }
+      });
+      socket.addEventListener('error', () => {
+        if (this.sharedSocket === socket) {
+          this.sharedSocket = null;
+          this.sharedSocketUrl = '';
+          this.scheduleSharedSocketReconnect();
+        }
+      });
+    } catch {
+      this.scheduleSharedSocketReconnect();
+    }
+  }
+
   activeSession() {
     return this.state.sessions.find((session) => session.id === this.state.activeSessionId) || null;
   }
@@ -499,7 +547,12 @@ export class SystemDesignStudio {
         ? await this.api.updateSharedInterview(this.state.pendingShareToken, body)
         : await this.api.updateInterview(active.id, body);
       const saved = this.upsertSession(result.interview);
-      this.setState({ saveState: 'saved', activeSessionId: saved.id });
+      this.setState({
+        saveState: 'saved',
+        activeSessionId: saved.id,
+        role: result.role || this.state.role,
+        visibility: result.visibility || this.state.visibility,
+      });
     } catch (error) {
       this.setState({ saveState: 'save failed' });
       this.toast(error.message);
@@ -508,7 +561,7 @@ export class SystemDesignStudio {
 
   async saveReview(decision) {
     const active = this.activeSession();
-    if (!active) return;
+    if (!active || !this.canSubmitReview()) return;
     const review = {
       decision,
       feedback: this.state.reviewFeedback.trim(),
@@ -527,7 +580,12 @@ export class SystemDesignStudio {
         ? await this.api.updateSharedInterview(this.state.pendingShareToken, body)
         : await this.api.updateInterview(active.id, body);
       const saved = this.upsertSession(result.interview);
-      this.setState({ saveState: 'saved', activeSessionId: saved.id });
+      this.setState({
+        saveState: 'saved',
+        activeSessionId: saved.id,
+        role: result.role || this.state.role,
+        visibility: result.visibility || this.state.visibility,
+      });
       this.toast('Review saved');
     } catch (error) {
       this.setState({ saveState: 'save failed' });
@@ -539,9 +597,7 @@ export class SystemDesignStudio {
     const draft = this.state.draft;
     const question = questionById(draft.questionId);
     const spec = QUESTION_SPEC[question.id] || QUESTION_SPEC.twitter;
-    const architecture = this.state.comps.length
-      ? this.architecturePayload()
-      : this.seedFor(question.id);
+    const architecture = this.architecturePayload();
     return {
       questionId: question.id,
       title: draft.questionMode === 'custom' && draft.customPrompt ? `Custom ${question.title}` : question.title,
@@ -581,67 +637,20 @@ export class SystemDesignStudio {
     return this.upsertSession(session);
   }
 
-  shareLinksFor(session) {
-    return {
-      candidate: buildShareUrl({ baseUrl: this.baseUrl(), role: 'candidate', session }),
-      interviewer: buildShareUrl({ baseUrl: this.baseUrl(), role: 'interviewer', session }),
-      panel: buildShareUrl({ baseUrl: this.baseUrl(), role: 'panel', session }),
-    };
-  }
-
-  seedFor(question) {
-    const rename = {
-      whatsapp: ['Mobile App', 'API Gateway', 'Message Service', 'Presence Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
-      uber: ['Mobile App', 'API Gateway', 'Dispatch Service', 'Trip Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
-      netflix: ['Web Client', 'CDN', 'Playback API', 'Encoding Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
-      tinyurl: ['Browser', 'API Gateway', 'Redirect Service', 'Link Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
-      gdocs: ['Web Client', 'API Gateway', 'Collab Service', 'Document Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
-      youtube: ['Web Client', 'CDN', 'Upload Service', 'Transcode Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
-      dropbox: ['Desktop Client', 'API Gateway', 'Sync Service', 'Metadata Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
-      instagram: ['Mobile App', 'CDN', 'Feed Service', 'Media Service', 'Redis', 'DynamoDB', 'Kafka', 'S3'],
-      search: ['Browser', 'API Gateway', 'Query Service', 'Crawler Service', 'Redis', 'Elasticsearch', 'Kafka', 'S3'],
-      notif: ['Service', 'API Gateway', 'Template Service', 'Delivery Worker', 'Redis', 'DynamoDB', 'Kafka', 'SQS'],
-      payment: ['Web Client', 'API Gateway', 'Payment Service', 'Ledger Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
-      delivery: ['Mobile App', 'API Gateway', 'Order Service', 'Dispatch Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
-      matching: ['Mobile App', 'API Gateway', 'Matching Service', 'Geo Service', 'Redis', 'PostgreSQL', 'Kafka', 'S3'],
-    };
-    const names = rename[question];
-    if (!names) {
-      return {
-        comps: SEED.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
-        edges: SEED.edges.map((edge) => ({ ...edge })),
-        comments: [],
-      };
-    }
-    const comps = SEED.comps.slice(0, 8).map((component, index) => ({
-      ...component,
-      type: names[index] || component.type,
-      base: /Service|Worker|API$/.test(names[index] || '') ? 'Service' : component.base,
-      cat: index < 2 ? component.cat : index < 4 ? 'Compute' : index < 6 ? 'Storage' : index === 6 ? 'Messaging' : 'Storage',
-      props: { ...(component.props || {}) },
-    }));
-    return {
-      comps,
-      edges: SEED.edges.filter((edge) => comps.some((component) => component.id === edge.from) && comps.some((component) => component.id === edge.to)).map((edge) => ({ ...edge })),
-      comments: [],
-    };
-  }
-
   openWorkspace(question = this.state.question, options = {}) {
     const session = options.sessionId
       ? this.state.sessions.find((item) => item.id === options.sessionId)
       : this.activeSession();
-    const persisted = session?.architecture;
-    const seed = persisted?.comps?.length ? persisted : this.seedFor(question);
+    const canvas = session?.architecture || { comps: [], edges: [], comments: [] };
+    const workspaceQuestion = session?.questionId || question;
     this.setState({
       screen: 'workspace',
-      question,
+      question: workspaceQuestion,
       role: options.role || this.state.role || 'interviewer',
-      rolePreview: options.rolePreview || null,
       activeSessionId: options.sessionId || this.state.activeSessionId,
-      comps: (seed.comps || []).map((component) => ({ ...component, props: { ...(component.props || {}) } })),
-      edges: (seed.edges || []).map((edge) => ({ ...edge })),
-      comments: (seed.comments || []).map((comment) => ({ ...comment })),
+      comps: (canvas.comps || []).map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+      edges: (canvas.edges || []).map((edge) => ({ ...edge })),
+      comments: (canvas.comments || []).map((comment) => ({ ...comment })),
       pan: { x: 0, y: 0 },
       connectionStartId: null,
       saveState: session ? 'saved' : 'idle',
@@ -656,6 +665,7 @@ export class SystemDesignStudio {
       aiOpen: false,
       inspectorTab: 'general',
     });
+    this.connectSharedSocket();
   }
 
   openWorkspaceForSession(session, role = this.state.role) {
@@ -664,7 +674,7 @@ export class SystemDesignStudio {
   }
 
   activeRole() {
-    return this.state.rolePreview || this.state.role || 'interviewer';
+    return this.state.role || 'interviewer';
   }
 
   permissions() {
@@ -684,6 +694,7 @@ export class SystemDesignStudio {
         canInjectFailures: false,
         canSeeAiHints: !permissions.aiHintsInterviewerOnly,
         canSeeScorecard: false,
+        canSubmitReview: false,
       };
     }
     if (role === 'panel') {
@@ -695,6 +706,7 @@ export class SystemDesignStudio {
         canInjectFailures: false,
         canSeeAiHints: false,
         canSeeScorecard: Boolean(permissions.panelCanViewReview),
+        canSubmitReview: false,
       };
     }
     return {
@@ -705,6 +717,7 @@ export class SystemDesignStudio {
       canInjectFailures: Boolean(permissions.allowFailureInjection),
       canSeeAiHints: true,
       canSeeScorecard: true,
+      canSubmitReview: true,
     };
   }
 
@@ -722,6 +735,62 @@ export class SystemDesignStudio {
 
   canViewAiHints() {
     return Boolean(this.visibility().canSeeAiHints);
+  }
+
+  canSubmitReview() {
+    return Boolean(this.visibility().canSubmitReview);
+  }
+
+  async refreshActiveSession({ force = false } = {}) {
+    const active = this.activeSession();
+    if (!active) return null;
+    if (!force && (this.drag || this.state.saveState === 'saving')) return active;
+    try {
+      let role = this.state.role;
+      let visibility = this.state.visibility;
+      let nextSession = null;
+      if (this.state.pendingShareToken) {
+        const shared = await this.api.share(this.state.pendingShareToken);
+        role = shared.role || role;
+        visibility = shared.visibility || visibility;
+        nextSession = normalizeSession(shared.interview);
+      } else if (typeof this.api.token === 'function' && this.api.token()) {
+        const list = await this.api.interviews();
+        nextSession = list.interviews.map(normalizeSession).find((session) => session?.id === active.id) || null;
+      }
+      if (!nextSession) return active;
+      const currentTime = Date.parse(active.updatedAt || '') || 0;
+      const nextTime = Date.parse(nextSession.updatedAt || '') || 0;
+      if (!force && nextTime <= currentTime) return active;
+      const saved = this.upsertSession(nextSession);
+      const canvas = saved.architecture || { comps: [], edges: [], comments: [] };
+      const selectedExists = (canvas.comps || []).some((component) => component.id === this.state.selectedId);
+      const edgeExists = (canvas.edges || []).some((edge) => edge.id === this.state.selectedEdgeId);
+      const patch = {
+        activeSessionId: saved.id,
+        role,
+        visibility,
+        saveState: 'saved',
+      };
+      if (this.state.screen === 'workspace' || this.state.screen === 'review') {
+        Object.assign(patch, {
+          question: saved.questionId,
+          comps: (canvas.comps || []).map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+          edges: (canvas.edges || []).map((edge) => ({ ...edge })),
+          comments: (canvas.comments || []).map((comment) => ({ ...comment })),
+          reviewFeedback: saved.review?.feedback || this.state.reviewFeedback,
+          reviewDecision: saved.review?.decision || this.state.reviewDecision,
+          selectedId: selectedExists ? this.state.selectedId : null,
+          selectedEdgeId: edgeExists ? this.state.selectedEdgeId : null,
+        });
+      }
+      this.setState(patch);
+      this.connectSharedSocket();
+      return saved;
+    } catch (error) {
+      if (force) this.toast(error.message);
+      return active;
+    }
   }
 
   render() {
@@ -768,7 +837,7 @@ export class SystemDesignStudio {
               <div class="mono-label">Invite visibility</div>
               <div class="visibility-row"><span>Role</span><strong>${esc(ROLE_LABELS[invite.role] || invite.role)}</strong></div>
               <div class="visibility-row"><span>Question</span><strong>${esc(invite.session.title)}</strong></div>
-              <div class="visibility-row"><span>Candidate screen</span><strong>${invite.session.permissions.showHealthToCandidate ? 'Health visible' : 'Health hidden'}</strong></div>
+              <div class="visibility-row"><span>Candidate access</span><strong>${invite.session.permissions.showHealthToCandidate ? 'Health visible' : 'Health hidden'}</strong></div>
             </div>` : ''}
           </section>
         </div>
@@ -778,6 +847,18 @@ export class SystemDesignStudio {
   renderJoin() {
     const invite = this.state.pendingInvite;
     const session = invite?.session || this.activeSession();
+    if (!session && this.state.pendingShareToken) {
+      return `
+        <div class="app dashboard">
+          ${this.renderTopbar('join')}
+          <div style="min-height:calc(100vh - 54px);display:grid;place-items:center;padding:34px">
+            <div class="card stat" style="width:min(560px,100%);padding:28px;text-align:center">
+              <div class="page-title">Opening shared workspace</div>
+              <p class="subtle">Validating the invite token and loading the latest interview state.</p>
+            </div>
+          </div>
+        </div>`;
+    }
     if (!session) return this.renderDashboard();
     return `
       <div class="app dashboard">
@@ -786,7 +867,7 @@ export class SystemDesignStudio {
           <div class="card stat" style="width:min(760px,100%);padding:28px">
             <div class="pill" style="width:max-content;color:var(--accent-soft);margin-bottom:14px">${esc(ROLE_LABELS[this.state.role] || this.state.role)} invite</div>
             <div class="page-title">${esc(session.title)}</div>
-            <p class="subtle">You are joining as ${esc(ROLE_LABELS[this.state.role] || this.state.role)}. Screen visibility is applied before the workspace opens.</p>
+            <p class="subtle">You are joining the shared workspace as ${esc(ROLE_LABELS[this.state.role] || this.state.role)}. Your role controls what you can edit, inspect, and review.</p>
             <div class="grid" style="grid-template-columns:repeat(3,1fr);margin:18px 0">
               <div class="card stat"><div class="subtle">Interviewer</div><strong>${esc(session.owner.name)}</strong></div>
               <div class="card stat"><div class="subtle">Candidate</div><strong>${esc(session.candidate.name)}</strong></div>
@@ -830,7 +911,7 @@ export class SystemDesignStudio {
           ${activeSessions.length ? activeSessions.slice(0, 2).map((session) => this.renderSessionCard(session)).join('') : `
             <div class="card empty-state">
               <strong>No active interview yet</strong>
-              <span class="subtle">Choose a preset or create a custom prompt to generate role-specific share links.</span>
+              <span class="subtle">Choose a preset or create a custom prompt to start a shared blank workspace.</span>
               <button class="btn primary" data-action="setup">Create interview</button>
             </div>`}
           <div class="section-head">
@@ -895,7 +976,7 @@ export class SystemDesignStudio {
           <div class="page-head">
             <div>
               <div class="page-title">Create interview</div>
-              <div class="subtle">Configure the workspace, permissions, diagnostics, and role-specific share links.</div>
+              <div class="subtle">Configure the question, permissions, diagnostics, and shared blank workspace.</div>
             </div>
             <div style="display:flex;gap:10px">
               <button class="btn" data-action="workspace" data-question="${esc(draft.questionId)}">Start workspace</button>
@@ -992,9 +1073,9 @@ export class SystemDesignStudio {
   renderVisibilityMatrix(source) {
     const permissions = { ...DEFAULT_PERMISSIONS, ...(source?.permissions || {}) };
     const rows = [
-      ['Candidate screen', permissions.allowCandidateEdit ? 'Can edit canvas' : 'View only'],
-      ['Interviewer screen', permissions.allowFailureInjection ? 'Diagnostics + failure injection' : 'Diagnostics only'],
-      ['Panel screen', permissions.panelCanViewReview ? 'Review summary visible' : 'No review access'],
+      ['Candidate access', permissions.allowCandidateEdit ? 'Can edit canvas' : 'View only'],
+      ['Interviewer access', permissions.allowFailureInjection ? 'Diagnostics + failure injection' : 'Diagnostics only'],
+      ['Panel access', permissions.panelCanViewReview ? 'Review summary visible' : 'No review access'],
       ['Health score', permissions.showHealthToCandidate ? 'Visible to candidate' : 'Hidden from candidate'],
     ];
     return `<div class="visibility-card">${rows.map(([a, b]) => `<div class="visibility-row"><span>${esc(a)}</span><strong>${esc(b)}</strong></div>`).join('')}</div>`;
@@ -1011,9 +1092,9 @@ export class SystemDesignStudio {
           <div class="card stat" style="width:min(820px,100%);padding:28px">
             <div class="icon-tile" style="width:48px;height:48px;color:#6ee7b7;background:rgba(52,211,153,.14);margin-bottom:18px">${this.icon('shield', 24)}</div>
             <div class="page-title">Share links generated</div>
-            <p class="subtle">These links are backed by server-side invite tokens. Each role receives a different workspace view.</p>
+            <p class="subtle">These links open the same live workspace. Server-side roles decide who can edit, inspect health, inject failures, and submit review notes.</p>
             ${['candidate', 'interviewer', 'panel'].map((role) => `
-              <div class="mono-label" style="margin-top:12px">${esc(ROLE_LABELS[role])} link</div>
+              <div class="mono-label" style="margin-top:12px">${esc(ROLE_LABELS[role])} invite</div>
               <div style="display:flex;gap:10px;margin:8px 0 10px">
                 <input class="field" data-role-link="${esc(role)}" readonly value="${esc(links[role] || '')}">
                 <button class="btn" data-action="copyShareLink" data-role="${esc(role)}">Copy</button>
@@ -1042,7 +1123,7 @@ export class SystemDesignStudio {
         <div class="workspace-main">
           ${this.renderPalette()}
           ${this.renderCanvas()}
-          ${this.state.aiOpen ? this.renderAiPanel() : this.renderRightPanel()}
+          ${this.state.aiOpen && this.canViewAiHints() ? this.renderAiPanel() : this.renderRightPanel()}
         </div>
         ${this.renderStatusbar()}
       </div>`;
@@ -1064,18 +1145,18 @@ export class SystemDesignStudio {
           <button class="btn icon-btn ${this.state.tool === 'comment' ? 'active' : ''}" data-action="tool" data-tool="comment" title="Comment">${this.icon('bell', 16)}</button>
           <span class="pill role-pill">${esc(ROLE_LABELS[role] || role)}</span>
           <div class="spacer"></div>
-          <span class="mono-label toolbar-label">Simulate</span>
-          <button class="btn danger" data-action="breakSelected" ${this.canInjectFailures() ? '' : 'disabled'}>Break</button>
-          <button class="btn ${this.state.traffic ? 'active' : ''}" data-action="traffic" data-value="1000">Traffic ${this.state.traffic ? 'x' + this.state.traffic : ''}</button>
-          <button class="btn" data-action="injectScenario" data-scenario="redis" ${this.canInjectFailures() ? '' : 'disabled'}>Redis down</button>
-          <button class="btn optional-wide" data-action="injectScenario" data-scenario="kafka" ${this.canInjectFailures() ? '' : 'disabled'}>Kafka down</button>
-          <button class="btn optional-wide" data-action="injectScenario" data-scenario="db" ${this.canInjectFailures() ? '' : 'disabled'}>DB outage</button>
-          <button class="btn" data-action="resetSimulation" ${this.canInjectFailures() ? '' : 'disabled'}>Reset</button>
+          ${this.canInjectFailures() ? `
+            <span class="mono-label toolbar-label">Simulate</span>
+            <button class="btn danger" data-action="breakSelected">Break</button>
+            <button class="btn ${this.state.traffic ? 'active' : ''}" data-action="traffic" data-value="1000">Traffic ${this.state.traffic ? 'x' + this.state.traffic : ''}</button>
+            <button class="btn" data-action="injectScenario" data-scenario="redis">Redis down</button>
+            <button class="btn optional-wide" data-action="injectScenario" data-scenario="kafka">Kafka down</button>
+            <button class="btn optional-wide" data-action="injectScenario" data-scenario="db">DB outage</button>
+            <button class="btn" data-action="resetSimulation">Reset</button>
+          ` : ''}
           <div class="spacer"></div>
-          <button class="btn" data-action="previewRole" data-role="candidate">Candidate screen</button>
-          <button class="btn" data-action="previewRole" data-role="interviewer">Interviewer screen</button>
-          <button class="btn" data-action="toggleAi" ${this.canViewAiHints() ? '' : 'disabled'}>AI hints</button>
-          <button class="btn primary" data-action="review">Finish & review</button>`
+          ${this.canViewAiHints() ? '<button class="btn" data-action="toggleAi">AI hints</button>' : ''}
+          ${this.visibility().canSeeScorecard ? '<button class="btn primary" data-action="review">Finish & review</button>' : ''}`
         : `
           <div class="spacer"></div>
           <button class="btn" data-action="dashboard">Dashboard</button>
@@ -1471,7 +1552,10 @@ export class SystemDesignStudio {
     if (action === 'authMode') this.setState({ authMode: target.dataset.mode });
     if (action === 'signIn') await this.signIn();
     if (action === 'signOut') this.signOut();
-    if (action === 'dashboard') this.setState({ screen: 'dashboard' });
+    if (action === 'dashboard') {
+      this.closeSharedSocket();
+      this.setState({ screen: 'dashboard' });
+    }
     if (action === 'setup') this.setState({ screen: 'setup' });
     if (action === 'workspace') {
       if (this.state.screen === 'dashboard' && target.dataset.question) {
@@ -1480,10 +1564,19 @@ export class SystemDesignStudio {
           screen: 'setup',
           question: question.id,
           draft: { ...createDefaultDraft(this.state.currentUser, question.id), questionId: question.id },
+          activeSessionId: null,
+          shareLinks: {},
+          candidateLink: '',
+          interviewerLink: '',
+          comps: [],
+          edges: [],
+          comments: [],
         });
         return;
       }
-      const session = this.activeSession() || await this.persistSessionFromSetup();
+      const session = this.state.screen === 'setup'
+        ? await this.persistSessionFromSetup()
+        : this.activeSession() || await this.persistSessionFromSetup();
       if (session) this.openWorkspace(session.questionId, { sessionId: session.id });
     }
     if (action === 'resumeSession') {
@@ -1513,7 +1606,7 @@ export class SystemDesignStudio {
     }
     if (action === 'copyLink') await this.copyText(this.state.candidateLink, 'Candidate link copied');
     if (action === 'copyShareLink') await this.copyText(this.state.shareLinks[target.dataset.role], `${ROLE_LABELS[target.dataset.role]} link copied`);
-    if (action === 'review') this.setState({ screen: 'review' });
+    if (action === 'review' && this.visibility().canSeeScorecard) this.setState({ screen: 'review' });
     if (action === 'submitted') await this.saveReview(target.dataset.decision);
     if (action === 'selectNode') {
       if (this.state.tool === 'connect' && this.canEdit()) this.createConnection(target.dataset.nodeId);
@@ -1523,11 +1616,10 @@ export class SystemDesignStudio {
     if (action === 'selectDiagnostic') this.setState({ selectedId: target.dataset.nodeId || null, selectedEdgeId: null, problemsOpen: true });
     if (action === 'tab') this.setState({ inspectorTab: target.dataset.tab });
     if (action === 'toggleProblems') this.setState({ problemsOpen: !this.state.problemsOpen });
-    if (action === 'toggleAi') this.setState({ aiOpen: !this.state.aiOpen });
+    if (action === 'toggleAi' && this.canViewAiHints()) this.setState({ aiOpen: !this.state.aiOpen });
     if (action === 'tool') this.setState({ tool: target.dataset.tool });
-    if (action === 'previewRole') this.setState({ rolePreview: this.state.rolePreview === target.dataset.role ? null : target.dataset.role, aiOpen: false });
-    if (action === 'traffic') this.setState({ traffic: this.state.traffic ? 0 : Number(target.dataset.value || 1000), problemsOpen: true });
-    if (action === 'resetSimulation') this.setState({ traffic: 0, broken: [], constraints: [], problemsOpen: false });
+    if (action === 'traffic' && this.canInjectFailures()) this.setState({ traffic: this.state.traffic ? 0 : Number(target.dataset.value || 1000), problemsOpen: true });
+    if (action === 'resetSimulation' && this.canInjectFailures()) this.setState({ traffic: 0, broken: [], constraints: [], problemsOpen: false });
     if (action === 'injectScenario') this.injectScenario(target.dataset.scenario);
     if (action === 'breakSelected') this.toggleBreakSelected();
     if (action === 'deleteSelected') this.deleteSelected();
@@ -1558,7 +1650,7 @@ export class SystemDesignStudio {
         sessions: this.state.pendingInvite
           ? [this.state.pendingInvite.session, ...sessions.filter((session) => session.id !== this.state.pendingInvite.session.id)]
           : sessions,
-        screen: this.state.pendingInvite ? 'join' : 'dashboard',
+        screen: (this.state.pendingInvite || this.state.pendingShareToken) ? 'join' : 'dashboard',
       });
     } catch (error) {
       this.toast(error.message);
@@ -1566,6 +1658,7 @@ export class SystemDesignStudio {
   }
 
   signOut() {
+    this.closeSharedSocket();
     this.api.setToken('');
     try {
       this.storage?.removeItem(STORAGE_KEYS.user);
