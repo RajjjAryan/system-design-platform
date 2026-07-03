@@ -314,6 +314,72 @@ textarea:disabled {
   margin-bottom: 24px;
 }
 
+.auth-steps {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.auth-steps div,
+.demo-steps div {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  align-items: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.auth-steps strong,
+.demo-steps strong {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: white;
+  background: var(--accent);
+  font: 800 11px var(--mono);
+}
+
+.auth-error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.34);
+  border-radius: 8px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.25);
+  font-size: 12.5px;
+}
+
+.password-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.password-rules {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.password-rules div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.password-rules .valid {
+  color: var(--good);
+}
+
+.password-rules .invalid {
+  color: var(--bad-2);
+}
+
 .empty-state {
   display: grid;
   gap: 10px;
@@ -532,6 +598,12 @@ textarea:disabled {
   stroke-dasharray: 6 5;
 }
 
+.edge-path.preview {
+  stroke: var(--accent-soft);
+  stroke-dasharray: 4 4;
+  opacity: 0.82;
+}
+
 .edge-label {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -549,6 +621,12 @@ textarea:disabled {
   color: #111827;
   background: var(--warn);
   border-color: var(--warn);
+}
+
+.edge-protocol-editor {
+  min-width: 92px;
+  color: var(--text);
+  outline: none;
 }
 
 .node {
@@ -850,6 +928,28 @@ textarea:disabled {
 
 .score-dot.on {
   background: var(--accent);
+}
+
+.demo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 7, 18, 0.68);
+}
+
+.demo-card {
+  width: min(520px, 100%);
+  padding: 24px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.44);
+}
+
+.demo-steps {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
 }
 
 .toast {

@@ -19,6 +19,24 @@ function eventTargetWithClosest(matches = {}) {
   };
 }
 
+function canvasTarget(rect = { left: 0, top: 0 }) {
+  const canvas = {
+    getBoundingClientRect() {
+      return { left: rect.left, top: rect.top };
+    },
+  };
+  return {
+    canvas,
+    target: {
+      tagName: 'DIV',
+      closest(selector) {
+        if (selector === '[data-canvas]') return canvas;
+        return null;
+      },
+    },
+  };
+}
+
 function storage() {
   const data = new Map();
   return {
@@ -35,6 +53,53 @@ function storage() {
 }
 
 const owner = { name: 'Neha Rao', email: 'neha@example.com' };
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'login';
+  app.state.authMode = 'signup';
+  app.state.login.password = 'short';
+
+  const login = app.renderLogin();
+
+  assert.equal(login.includes('data-action="togglePasswordVisibility"'), true);
+  assert.equal(login.includes('Create account'), true);
+  assert.equal(login.includes('Create an interview'), true);
+  assert.equal(login.includes('Share candidate link'), true);
+  assert.equal(login.includes('Use at least 12 characters'), true);
+  assert.equal(login.includes('data-password-rule="minLength"'), true);
+
+  app.togglePasswordVisibility();
+  assert.equal(app.state.passwordVisible, true);
+  assert.equal(app.renderLogin().includes('type="text"'), true);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      async signup() {
+        const error = new Error('Password does not meet the requirements');
+        error.details = { password: ['Use at least 12 characters'] };
+        throw error;
+      },
+    },
+  });
+  app.state.screen = 'login';
+  app.state.authMode = 'signup';
+  app.state.login = { name: 'Neha Rao', email: 'neha@example.com', password: 'short' };
+
+  await app.signIn();
+
+  assert.equal(app.state.authError, 'Password does not meet the requirements');
+  assert.deepEqual(app.state.authDetails.password, ['Use at least 12 characters']);
+  assert.equal(app.renderLogin().includes('Password does not meet the requirements'), true);
+}
 
 {
   const app = new SystemDesignStudio(root(), {
@@ -526,4 +591,131 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
   assert.equal(panel.includes('Ideal solution'), true);
   assert.equal(panel.includes('Suggested score'), true);
   assert.equal(app.compareToIdealSolution().coverage > 0, true);
+}
+
+{
+  const local = storage();
+  const draft = createDefaultDraft(owner, 'payment');
+  const session = createSessionFromDraft({ user: owner, draft, questionId: 'payment' });
+  const app = new SystemDesignStudio(root(), {
+    storage: local,
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.sessions = [session];
+  app.state.activeSessionId = session.id;
+
+  app.openWorkspace('payment', { sessionId: session.id, role: 'candidate' });
+
+  assert.equal(app.state.demoOpen, true);
+  assert.equal(app.renderWorkspace().includes('data-action="dismissDemo"'), true);
+  assert.equal(app.renderWorkspace().includes('Drag components from the palette'), true);
+
+  app.dismissDemo();
+  assert.equal(app.state.demoOpen, false);
+  assert.equal(local.getItem('sds.demoDismissed'), 'true');
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [
+    { id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120, w: 150 },
+    { id: 'db', type: 'PostgreSQL', cat: 'Storage', x: 360, y: 120, w: 150 },
+  ];
+  app.state.edges = [];
+
+  const sourceNode = { dataset: { nodeId: 'api' } };
+  const connectButton = {
+    dataset: { nodeId: 'api' },
+    closest(selector) {
+      if (selector === '.node-connect') return this;
+      if (selector === '[data-node-id]') return sourceNode;
+      return null;
+    },
+  };
+  app.handlePointerDown({
+    button: 0,
+    clientX: 175,
+    clientY: 153,
+    target: connectButton,
+    preventDefault() {},
+  });
+  app.handlePointerMove({ clientX: 435, clientY: 153 });
+  await app.handlePointerUp({
+    target: eventTargetWithClosest({ '[data-node-id]': { dataset: { nodeId: 'db' } } }),
+  });
+
+  assert.equal(app.state.edges.length, 1);
+  assert.equal(app.state.edges[0].from, 'api');
+  assert.equal(app.state.edges[0].to, 'db');
+  assert.equal(app.state.connectionStartId, null);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [
+    { id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120, w: 150 },
+    { id: 'db', type: 'PostgreSQL', cat: 'Storage', x: 360, y: 120, w: 150 },
+  ];
+  app.state.edges = [{ id: 'edge-1', from: 'api', to: 'db', protocol: 'gRPC' }];
+
+  app.beginEdgeProtocolEdit('edge-1');
+  assert.equal(app.renderEdgeLabel(app.state.edges[0], app.byId()).includes('data-edge-protocol-select'), true);
+  app.commitEdgeProtocol('HTTP');
+  assert.equal(app.state.edges[0].protocol, 'HTTP');
+  assert.equal(app.state.editingEdgeId, null);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  const { target } = canvasTarget();
+
+  app.handleDoubleClick({
+    clientX: 240,
+    clientY: 180,
+    target,
+  });
+
+  assert.equal(app.state.comments.length, 1);
+  assert.equal(app.state.comments[0].text, '');
+  assert.equal(app.renderComments().includes('data-comment-id'), true);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.zoom = 1;
+  app.state.pan = { x: 0, y: 0 };
+  const { target } = canvasTarget();
+
+  app.handleWheel({
+    deltaY: -120,
+    clientX: 200,
+    clientY: 100,
+    target,
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.zoom, 1.1);
+  assert.equal(app.state.pan.x, -20);
+  assert.equal(app.state.pan.y, -10);
 }

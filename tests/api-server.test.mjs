@@ -41,6 +41,15 @@ try {
   const anonymous = await request(app.baseUrl, 'GET', '/api/interviews');
   assert.equal(anonymous.response.status, 401);
 
+  const weakPassword = await request(app.baseUrl, 'POST', '/api/auth/signup', {
+    name: 'Weak Password',
+    email: 'weak@example.com',
+    password: 'short',
+  });
+  assert.equal(weakPassword.response.status, 400);
+  assert.equal(weakPassword.json.error, 'Password does not meet the requirements');
+  assert.deepEqual(weakPassword.json.details.password, ['Use at least 12 characters']);
+
   const signup = await request(app.baseUrl, 'POST', '/api/auth/signup', {
     name: 'Neha Rao',
     email: 'neha@example.com',

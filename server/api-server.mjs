@@ -59,6 +59,25 @@ function requiredString(value, name, min = 1) {
   return out;
 }
 
+function passwordValidationIssues(value) {
+  const password = String(value || '');
+  const issues = [];
+  if (password.length < 12) issues.push('Use at least 12 characters');
+  return issues;
+}
+
+function requiredSignupPassword(value) {
+  const password = String(value || '');
+  const issues = passwordValidationIssues(password);
+  if (issues.length) {
+    const error = new Error('Password does not meet the requirements');
+    error.status = 400;
+    error.details = { password: issues };
+    throw error;
+  }
+  return password;
+}
+
 function parseJson(value, fallback) {
   if (!value) return fallback;
   try {
@@ -385,7 +404,7 @@ async function routeApi(req, res, context) {
     const body = await readBody(req);
     const name = requiredString(body.name, 'name');
     const email = normalizeEmail(requiredString(body.email, 'email'));
-    const password = requiredString(body.password, 'password', 12);
+    const password = requiredSignupPassword(body.password);
     const now = new Date().toISOString();
     const user = { id: id('usr'), name, email, createdAt: now };
     try {
@@ -723,7 +742,10 @@ export function createApiServer(options = {}) {
       serveStatic(req, res);
     } catch (error) {
       const status = error.status || 500;
-      json(res, status, { error: status >= 500 ? 'Internal server error' : error.message }, corsHeaders(req, context.publicOrigin));
+      json(res, status, {
+        error: status >= 500 ? 'Internal server error' : error.message,
+        ...(status < 500 && error.details ? { details: error.details } : {}),
+      }, corsHeaders(req, context.publicOrigin));
     }
   });
   server.on('upgrade', (req, socket, head) => {

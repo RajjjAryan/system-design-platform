@@ -23,6 +23,7 @@ const STORAGE_KEYS = {
   user: 'sds.currentUser',
   sessions: 'sds.sessions',
   token: 'sds.apiToken',
+  demoDismissed: 'sds.demoDismissed',
 };
 
 export const DEFAULT_PERMISSIONS = {
@@ -90,6 +91,7 @@ class ApiClient {
     if (!response.ok) {
       const error = new Error(payload?.error || `Request failed with ${response.status}`);
       error.status = response.status;
+      error.details = payload?.details || {};
       throw error;
     }
     return payload;
@@ -178,6 +180,12 @@ function isCustomDraft(draft) {
 function titleFromPrompt(prompt, fallback = 'Custom interview') {
   const firstLine = String(prompt || '').split('\n').map((line) => line.trim()).find(Boolean) || fallback;
   return firstLine.length > 72 ? `${firstLine.slice(0, 69)}...` : firstLine;
+}
+
+function passwordValidationIssues(password) {
+  const issues = [];
+  if (String(password || '').length < 12) issues.push('Use at least 12 characters');
+  return issues;
 }
 
 function normalizeUser(user) {
@@ -299,6 +307,9 @@ export function createInitialState({ storage, location } = {}) {
     currentUser,
     authMode: 'signup',
     login: currentUser ? { name: currentUser.name, email: currentUser.email, password: '' } : { ...DEFAULT_LOGIN, password: '' },
+    passwordVisible: false,
+    authError: '',
+    authDetails: {},
     pendingInvite: null,
     pendingShareToken,
     visibility: null,
@@ -315,8 +326,12 @@ export function createInitialState({ storage, location } = {}) {
     paletteQuery: '',
     questionCollapsed: false,
     idealOpen: false,
+    demoDismissed: readStorage(storage, STORAGE_KEYS.demoDismissed, false) === true,
+    demoOpen: false,
     renamingId: null,
     renameDraft: '',
+    editingEdgeId: null,
+    connectionPreview: null,
     comments: activeSession?.architecture?.comments || [],
     saveState: activeSession ? 'saved' : 'idle',
     reviewFeedback: activeSession?.review?.feedback || '',
@@ -363,6 +378,7 @@ export class SystemDesignStudio {
     this.sharedSocket = null;
     this.sharedSocketUrl = '';
     this.reconnectTimer = null;
+    this.suppressNextStartConnectionClick = false;
   }
 
   mount() {
@@ -379,7 +395,7 @@ export class SystemDesignStudio {
     this.root.addEventListener('wheel', (event) => this.handleWheel(event), { passive: false });
     window.addEventListener('keydown', (event) => this.handleKeyDown(event));
     window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
-    window.addEventListener('pointerup', () => { void this.handlePointerUp(); });
+    window.addEventListener('pointerup', (event) => { void this.handlePointerUp(event); });
     this.render();
     void this.bootstrapFromApi();
     this.startSharedSync();
@@ -685,6 +701,8 @@ export class SystemDesignStudio {
       idealOpen: false,
       renamingId: null,
       renameDraft: '',
+      editingEdgeId: null,
+      connectionPreview: null,
       saveState: 'idle',
     });
   }
@@ -695,10 +713,11 @@ export class SystemDesignStudio {
       : this.activeSession();
     const canvas = session?.architecture || { comps: [], edges: [], comments: [] };
     const workspaceQuestion = session?.questionId || question;
+    const role = options.role || this.state.role || 'interviewer';
     this.setState({
       screen: 'workspace',
       question: workspaceQuestion,
-      role: options.role || this.state.role || 'interviewer',
+      role,
       activeSessionId: options.sessionId || this.state.activeSessionId,
       comps: (canvas.comps || []).map((component) => ({ ...component, props: { ...(component.props || {}) } })),
       edges: (canvas.edges || []).map((edge) => ({ ...edge })),
@@ -715,8 +734,11 @@ export class SystemDesignStudio {
       zoom: 1,
       questionCollapsed: false,
       idealOpen: false,
+      demoOpen: role === 'candidate' && !this.state.demoDismissed,
       renamingId: null,
       renameDraft: '',
+      editingEdgeId: null,
+      connectionPreview: null,
       constraints: [],
       problemsOpen: false,
       aiOpen: false,
@@ -874,6 +896,8 @@ export class SystemDesignStudio {
 
   renderLogin() {
     const invite = this.state.pendingInvite;
+    const passwordIssues = this.state.authMode === 'signup' ? passwordValidationIssues(this.state.login.password) : [];
+    const passwordDetails = this.state.authDetails?.password || passwordIssues;
     return `
       <div class="app dashboard auth-screen">
         <div class="auth-shell">
@@ -883,10 +907,20 @@ export class SystemDesignStudio {
             </div>
             <div class="page-title">${invite ? 'Sign in to join interview' : 'Sign in to your workspace'}</div>
             <p class="subtle">${invite ? `${esc(invite.session.owner.name)} shared ${esc(invite.session.title)} with you.` : 'Use a lightweight workspace account for local drafts, interviews, and share links.'}</p>
+            <div class="auth-steps">
+              <div><strong>1</strong><span>Create an interview</span></div>
+              <div><strong>2</strong><span>Share candidate link</span></div>
+              <div><strong>3</strong><span>Review the live architecture</span></div>
+            </div>
             <div class="pill-row" style="margin-top:18px">
               <button class="pill pill-button ${this.state.authMode === 'signup' ? 'active' : ''}" data-action="authMode" data-mode="signup">Create account</button>
               <button class="pill pill-button ${this.state.authMode === 'login' ? 'active' : ''}" data-action="authMode" data-mode="login">Sign in</button>
             </div>
+            ${this.state.authError ? `
+              <div class="auth-error" role="alert">
+                <strong>${esc(this.state.authError)}</strong>
+                ${(this.state.authDetails?.password || []).map((item) => `<div>${esc(item)}</div>`).join('')}
+              </div>` : ''}
             ${this.state.authMode === 'signup' ? `<label style="display:block;margin-top:18px">
               <span class="mono-label">Name</span>
               <input class="field" data-login-field="name" autocomplete="name" value="${esc(this.state.login.name)}" placeholder="Neha Rao">
@@ -897,8 +931,18 @@ export class SystemDesignStudio {
             </label>
             <label style="display:block;margin-top:12px">
               <span class="mono-label">Password</span>
-              <input class="field" data-login-field="password" type="password" autocomplete="${this.state.authMode === 'signup' ? 'new-password' : 'current-password'}" value="${esc(this.state.login.password)}" placeholder="At least 12 characters">
+              <span class="password-row">
+                <input class="field" data-login-field="password" type="${this.state.passwordVisible ? 'text' : 'password'}" autocomplete="${this.state.authMode === 'signup' ? 'new-password' : 'current-password'}" value="${esc(this.state.login.password)}" placeholder="At least 12 characters">
+                <button class="btn" type="button" data-action="togglePasswordVisibility">${this.state.passwordVisible ? 'Hide' : 'Show'}</button>
+              </span>
             </label>
+            ${this.state.authMode === 'signup' ? `
+              <div class="password-rules">
+                <div class="${passwordDetails.includes('Use at least 12 characters') ? 'invalid' : 'valid'}" data-password-rule="minLength">
+                  <span>${passwordDetails.includes('Use at least 12 characters') ? '!' : 'OK'}</span>
+                  <span>Use at least 12 characters</span>
+                </div>
+              </div>` : ''}
             <button class="btn primary" style="width:100%;margin-top:16px" data-action="signIn">${invite ? 'Continue to invite' : this.state.authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
             <div class="subtle" style="font-size:12px;margin-top:10px">Accounts and interviews are stored by the configured SystemDesign Studio API.</div>
             ${invite ? `<div class="visibility-card" style="margin-top:16px">
@@ -1195,7 +1239,25 @@ export class SystemDesignStudio {
             : this.state.aiOpen && this.canViewAiHints() ? this.renderAiPanel()
               : this.renderRightPanel()}
         </div>
+        ${this.state.demoOpen ? this.renderCandidateDemo() : ''}
         ${this.renderStatusbar()}
+      </div>`;
+  }
+
+  renderCandidateDemo() {
+    return `
+      <div class="demo-overlay">
+        <div class="demo-card card">
+          <div class="pill" style="width:max-content;color:var(--accent-soft)">Candidate walkthrough</div>
+          <div class="page-title" style="font-size:22px;margin-top:12px">Build your design on the shared canvas</div>
+          <div class="demo-steps">
+            <div><strong>1</strong><span>Drag components from the palette or click a component to add it.</span></div>
+            <div><strong>2</strong><span>Drag from a component + handle to another component to connect them.</span></div>
+            <div><strong>3</strong><span>Double-click the canvas to add a text box for assumptions and tradeoffs.</span></div>
+            <div><strong>4</strong><span>Your interviewer sees every change in the same live workspace.</span></div>
+          </div>
+          <button class="btn primary" style="width:100%;margin-top:18px" data-action="dismissDemo">Start designing</button>
+        </div>
       </div>`;
   }
 
@@ -1313,7 +1375,10 @@ export class SystemDesignStudio {
         ${questionPanel}
         ${this.state.connectionStartId ? '<div class="connection-hint">Choose a target component to create the connection</div>' : ''}
         <div class="canvas-layer" style="transform:translate(${this.state.pan.x}px, ${this.state.pan.y}px) scale(${this.state.zoom || 1})">
-          <svg class="edges">${this.state.edges.map((edge) => this.renderEdgePath(edge, byId)).join('')}</svg>
+          <svg class="edges">
+            ${this.state.edges.map((edge) => this.renderEdgePath(edge, byId)).join('')}
+            ${this.renderConnectionPreview(byId)}
+          </svg>
           ${this.state.edges.map((edge) => this.renderEdgeLabel(edge, byId)).join('')}
           ${this.state.comps.map((component) => this.renderNode(component, diagnostics, affected)).join('')}
           ${this.renderComments()}
@@ -1381,7 +1446,21 @@ export class SystemDesignStudio {
     if (!from || !to) return '';
     const x = (from.x + (from.w || 150) / 2 + to.x + (to.w || 150) / 2) / 2;
     const y = (from.y + 33 + to.y + 33) / 2;
+    if (this.state.editingEdgeId === edge.id) {
+      return `<select class="edge-label edge-protocol-editor" data-edge-protocol-select data-edge-id="${esc(edge.id)}" style="left:${x}px;top:${y}px">${EDGE_PROTOCOLS.map((item) => `<option ${item === edge.protocol ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select>`;
+    }
     return `<button class="edge-label ${this.state.traffic ? 'hot' : ''}" data-action="selectEdge" data-edge-id="${esc(edge.id)}" style="left:${x}px;top:${y}px">${esc(edge.badge || edge.protocol || 'HTTP')}</button>`;
+  }
+
+  renderConnectionPreview(byId) {
+    const from = byId[this.state.connectionStartId];
+    const to = this.state.connectionPreview;
+    if (!from || !to) return '';
+    const x1 = from.x + (from.w || 150) / 2;
+    const y1 = from.y + 33;
+    const dx = Math.max(30, Math.abs(to.x - x1) * 0.42);
+    const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`;
+    return `<path class="edge-path preview" d="${d}"></path>`;
   }
 
   renderRightPanel() {
@@ -1727,6 +1806,7 @@ export class SystemDesignStudio {
     if (target.disabled) return;
     const action = target.dataset.action;
     if (action === 'authMode') this.setState({ authMode: target.dataset.mode });
+    if (action === 'togglePasswordVisibility') this.togglePasswordVisibility();
     if (action === 'signIn') await this.signIn();
     if (action === 'signOut') this.signOut();
     if (action === 'dashboard') {
@@ -1778,6 +1858,10 @@ export class SystemDesignStudio {
       else this.setState({ selectedId: target.dataset.nodeId, selectedEdgeId: null, inspectorTab: 'general' });
     }
     if (action === 'startConnection' && this.canEdit()) {
+      if (this.suppressNextStartConnectionClick) {
+        this.suppressNextStartConnectionClick = false;
+        return;
+      }
       this.setState({ tool: 'connect' });
       this.createConnection(target.dataset.nodeId);
     }
@@ -1788,6 +1872,7 @@ export class SystemDesignStudio {
     if (action === 'toggleAi' && this.canViewAiHints()) this.setState({ aiOpen: !this.state.aiOpen });
     if (action === 'toggleIdealSolution' && this.canSubmitReview()) this.toggleIdealSolution();
     if (action === 'toggleQuestionPanel') this.toggleQuestionPanel();
+    if (action === 'dismissDemo') this.dismissDemo();
     if (action === 'tool') this.setState({ tool: target.dataset.tool });
     if (action === 'zoomOut') this.setZoom((this.state.zoom || 1) - 0.25);
     if (action === 'zoomIn') this.setZoom((this.state.zoom || 1) + 0.25);
@@ -1803,11 +1888,22 @@ export class SystemDesignStudio {
 
   async signIn() {
     try {
+      this.setState({ authError: '', authDetails: {} });
       const body = {
         name: this.state.login.name,
         email: this.state.login.email,
         password: this.state.login.password,
       };
+      if (this.state.authMode === 'signup') {
+        const issues = passwordValidationIssues(body.password);
+        if (issues.length) {
+          this.setState({
+            authError: 'Password does not meet the requirements',
+            authDetails: { password: issues },
+          });
+          return;
+        }
+      }
       const auth = this.state.authMode === 'login'
         ? await this.api.login(body)
         : await this.api.signup(body);
@@ -1820,14 +1916,26 @@ export class SystemDesignStudio {
       this.setState({
         currentUser: user,
         login: { name: user.name, email: user.email, password: '' },
+        authError: '',
+        authDetails: {},
         sessions: this.state.pendingInvite
           ? [this.state.pendingInvite.session, ...sessions.filter((session) => session.id !== this.state.pendingInvite.session.id)]
           : sessions,
         screen: (this.state.pendingInvite || this.state.pendingShareToken) ? 'join' : 'dashboard',
       });
     } catch (error) {
+      this.setState({ authError: error.message, authDetails: error.details || {} });
       this.toast(error.message);
     }
+  }
+
+  togglePasswordVisibility() {
+    this.setState({ passwordVisible: !this.state.passwordVisible });
+  }
+
+  dismissDemo() {
+    writeStorage(this.storage, STORAGE_KEYS.demoDismissed, true);
+    this.setState({ demoOpen: false, demoDismissed: true });
   }
 
   signOut() {
@@ -1901,9 +2009,23 @@ export class SystemDesignStudio {
 
   handleDoubleClick(event) {
     if (!this.canEdit()) return;
+    const edge = event.target.closest('.edge-label');
+    if (edge?.dataset.edgeId) {
+      event.preventDefault?.();
+      this.beginEdgeProtocolEdit(edge.dataset.edgeId);
+      return;
+    }
     const node = event.target.closest('[data-node-id]');
-    if (!node || event.target.closest('button, input, textarea, select')) return;
-    this.beginRename(node.dataset.nodeId);
+    if (node && !event.target.closest('button, input, textarea, select')) {
+      this.beginRename(node.dataset.nodeId);
+      return;
+    }
+    const canvas = event.target.closest('[data-canvas]');
+    if (canvas && !event.target.closest('[data-comment-id], .question-panel, .diag-panel')) {
+      const rect = canvas.getBoundingClientRect();
+      const point = this.canvasPoint(event.clientX, event.clientY, rect);
+      this.addTextBox(point.x, point.y);
+    }
   }
 
   handleWheel(event) {
@@ -1912,7 +2034,8 @@ export class SystemDesignStudio {
     if (!canvas || panel) return;
     event.preventDefault();
     const step = event.deltaY < 0 ? 0.1 : -0.1;
-    this.setZoom((this.state.zoom || 1) + step);
+    const rect = canvas.getBoundingClientRect?.() || { left: 0, top: 0 };
+    this.zoomAt(event.clientX || 0, event.clientY || 0, rect, (this.state.zoom || 1) + step);
   }
 
   handleInput(event) {
@@ -1932,6 +2055,8 @@ export class SystemDesignStudio {
     const login = event.target.closest('[data-login-field]');
     if (login) {
       this.state.login = { ...this.state.login, [login.dataset.loginField]: login.value };
+      this.state.authError = '';
+      this.state.authDetails = {};
       return;
     }
     const sessionField = event.target.closest('[data-session-field]');
@@ -1987,6 +2112,11 @@ export class SystemDesignStudio {
       this.render();
       void this.persistArchitecture();
     }
+    const edgeProtocol = event.target.closest('[data-edge-protocol-select]');
+    if (edgeProtocol && this.canEdit()) {
+      this.commitEdgeProtocol(edgeProtocol.value);
+      return;
+    }
     const comment = event.target.closest('[data-comment-id]');
     if (comment && event.target.tagName === 'TEXTAREA') {
       void this.persistArchitecture();
@@ -2027,6 +2157,26 @@ export class SystemDesignStudio {
     this.setState({ renamingId: null, renameDraft: '' });
   }
 
+  beginEdgeProtocolEdit(edgeId) {
+    if (!edgeId || !this.canEdit()) return;
+    if (!this.state.edges.some((edge) => edge.id === edgeId)) return;
+    this.setState({ editingEdgeId: edgeId, selectedEdgeId: edgeId, selectedId: null });
+  }
+
+  commitEdgeProtocol(protocol) {
+    if (!this.state.editingEdgeId || !this.canEdit()) return;
+    const nextProtocol = EDGE_PROTOCOLS.includes(protocol) ? protocol : 'HTTP';
+    this.setState({
+      edges: this.state.edges.map((edge) => edge.id === this.state.editingEdgeId
+        ? { ...edge, protocol: nextProtocol, badge: nextProtocol }
+        : edge),
+      selectedEdgeId: this.state.editingEdgeId,
+      selectedId: null,
+      editingEdgeId: null,
+    });
+    void this.persistArchitecture();
+  }
+
   toggleQuestionPanel() {
     this.setState({ questionCollapsed: !this.state.questionCollapsed });
   }
@@ -2060,7 +2210,26 @@ export class SystemDesignStudio {
 
   handlePointerDown(event) {
     if (event.button && event.button !== 0) return;
-    if (event.target.closest('.node-connect, [data-rename-input], button, input, textarea, select')) return;
+    const connect = event.target.closest('.node-connect');
+    if (connect && this.canEdit()) {
+      const nodeId = connect.dataset.nodeId || event.target.closest('[data-node-id]')?.dataset.nodeId;
+      if (!nodeId || !this.byId()[nodeId]) return;
+      event.preventDefault?.();
+      this.suppressNextStartConnectionClick = true;
+      const canvas = event.target.closest('[data-canvas]');
+      const rect = canvas?.getBoundingClientRect?.() || { left: 0, top: 0 };
+      const point = this.canvasPoint(event.clientX, event.clientY, rect);
+      this.drag = { kind: 'edge', id: nodeId, rect };
+      this.setState({
+        tool: 'select',
+        connectionStartId: nodeId,
+        selectedId: nodeId,
+        selectedEdgeId: null,
+        connectionPreview: point,
+      });
+      return;
+    }
+    if (event.target.closest('[data-rename-input], button, input, textarea, select')) return;
     const canvas = event.target.closest('[data-canvas]');
     if (this.state.tool === 'pan' && canvas) {
       event.preventDefault?.();
@@ -2089,13 +2258,26 @@ export class SystemDesignStudio {
       const zoom = this.state.zoom || 1;
       this.state.comps = this.state.comps.map((component) => component.id === this.drag.id ? { ...component, x: Math.round(this.drag.ox + dx / zoom), y: Math.round(this.drag.oy + dy / zoom) } : component);
       this.render();
+      return;
+    }
+    if (this.drag.kind === 'edge') {
+      this.state.connectionPreview = this.canvasPoint(event.clientX, event.clientY, this.drag.rect);
+      this.render();
     }
   }
 
-  async handlePointerUp() {
+  async handlePointerUp(event = {}) {
     const finished = this.drag;
     this.drag = null;
     if (finished?.kind === 'node') await this.persistArchitecture();
+    if (finished?.kind === 'edge') {
+      const targetId = event.target?.closest?.('[data-node-id]')?.dataset.nodeId;
+      if (targetId && targetId !== finished.id) {
+        this.finishConnection(finished.id, targetId);
+      } else {
+        this.setState({ connectionStartId: null, connectionPreview: null });
+      }
+    }
   }
 
   handleCanvasClick(event) {
@@ -2146,11 +2328,17 @@ export class SystemDesignStudio {
       this.setState({ connectionStartId: null });
       return;
     }
+    this.finishConnection(this.state.connectionStartId, nodeId);
+  }
+
+  finishConnection(fromId, toId) {
+    if (!fromId || !toId || !this.byId()[fromId] || !this.byId()[toId] || fromId === toId) return;
     const edge = {
       id: `e${Date.now()}`,
-      from: this.state.connectionStartId,
-      to: nodeId,
+      from: fromId,
+      to: toId,
       protocol: 'gRPC',
+      badge: 'gRPC',
       serializer: 'JSON',
       tls: true,
       retries: '2',
@@ -2162,6 +2350,7 @@ export class SystemDesignStudio {
       selectedId: null,
       selectedEdgeId: edge.id,
       connectionStartId: null,
+      connectionPreview: null,
     });
     void this.persistArchitecture();
   }
@@ -2179,6 +2368,34 @@ export class SystemDesignStudio {
     };
     this.setState({ comments: [...this.state.comments, comment] });
     void this.persistArchitecture();
+  }
+
+  addTextBox(x, y) {
+    if (!this.canEdit()) return;
+    const comment = {
+      id: `note-${Date.now()}`,
+      x: Math.round(x),
+      y: Math.round(y),
+      text: '',
+    };
+    this.setState({ comments: [...this.state.comments, comment] });
+    void this.persistArchitecture();
+  }
+
+  zoomAt(clientX, clientY, rect, nextZoom) {
+    const oldZoom = this.state.zoom || 1;
+    const zoom = Math.round(clamp(Number(nextZoom) || oldZoom, 0.5, 2) * 100) / 100;
+    const localX = clientX - rect.left;
+    const localY = clientY - rect.top;
+    const worldX = (localX - this.state.pan.x) / oldZoom;
+    const worldY = (localY - this.state.pan.y) / oldZoom;
+    this.setState({
+      zoom,
+      pan: {
+        x: Math.round(localX - worldX * zoom),
+        y: Math.round(localY - worldY * zoom),
+      },
+    });
   }
 
   deleteComment(commentId) {
@@ -2311,6 +2528,7 @@ export class SystemDesignStudio {
 
   toast(message) {
     this.setState({ toast: message });
+    if (typeof window === 'undefined' || typeof window.setTimeout !== 'function') return;
     window.setTimeout(() => {
       this.state.toast = '';
       this.render();
