@@ -1,20 +1,40 @@
+databases:
+  - name: systemdesign-studio-db
+    plan: starter
+    databaseName: systemdesign_studio
+    user: systemdesign_studio
+
 services:
   - type: web
     name: systemdesign-studio-api
     runtime: docker
     plan: starter
-    disk:
-      name: systemdesign-studio-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 8787
-      - key: SDS_DB_PATH
-        value: /var/data/systemdesign.sqlite
+      - key: DATABASE_URL
+        fromDatabase:
+          name: systemdesign-studio-db
+          property: connectionString
       - key: SDS_PUBLIC_ORIGIN
         sync: false
       - key: SDS_TOKEN_SECRET
         generateValue: true
+      - key: SDS_REQUIRE_EMAIL_VERIFICATION
+        value: true
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: SENTRY_ENVIRONMENT
+        value: production

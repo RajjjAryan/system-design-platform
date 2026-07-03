@@ -42,7 +42,7 @@ const ROLE_LABELS = {
   panel: 'Panel',
 };
 
-const DEFAULT_LOGIN = { name: '', email: '' };
+const DEFAULT_LOGIN = { name: '', email: '', password: '' };
 
 const runtimeConfig = typeof window !== 'undefined' ? (window.SDS_CONFIG || {}) : {};
 
@@ -108,6 +108,26 @@ class ApiClient {
 
   logout() {
     return this.request('/api/auth/logout', { method: 'POST' });
+  }
+
+  trackEvent(body) {
+    return this.request('/api/analytics/events', { method: 'POST', body });
+  }
+
+  requestVerification(body) {
+    return this.request('/api/auth/request-verification', { method: 'POST', body, token: '' });
+  }
+
+  verifyEmail(body) {
+    return this.request('/api/auth/verify-email', { method: 'POST', body, token: '' });
+  }
+
+  requestPasswordReset(body) {
+    return this.request('/api/auth/request-password-reset', { method: 'POST', body, token: '' });
+  }
+
+  resetPassword(body) {
+    return this.request('/api/auth/reset-password', { method: 'POST', body, token: '' });
   }
 
   me() {
@@ -303,6 +323,8 @@ export function createInitialState({ storage, location } = {}) {
   const sessions = readStorage(storage, STORAGE_KEYS.sessions, []).map(normalizeSession).filter(Boolean);
   const url = location instanceof URL ? location : new URL(location?.href || String(location || 'https://systemdesign.studio/'));
   const pendingShareToken = url.searchParams.get('share') || '';
+  const pendingVerifyToken = url.searchParams.get('verify') || '';
+  const pendingResetToken = url.searchParams.get('reset') || '';
   const activeSession = sessions[0] || null;
   const question = activeSession?.questionId || 'twitter';
   const draft = createDefaultDraft(currentUser, question);
@@ -317,15 +339,18 @@ export function createInitialState({ storage, location } = {}) {
   }
 
   return {
-    screen: currentUser ? (pendingShareToken ? 'join' : 'dashboard') : 'login',
+    screen: pendingVerifyToken || pendingResetToken ? 'login' : currentUser ? (pendingShareToken ? 'join' : 'dashboard') : 'login',
     currentUser,
-    authMode: 'signup',
-    login: currentUser ? { name: currentUser.name, email: currentUser.email, password: '' } : { ...DEFAULT_LOGIN, password: '' },
+    authMode: pendingResetToken ? 'reset' : 'signup',
+    login: currentUser ? { name: currentUser.name, email: currentUser.email, password: '' } : { ...DEFAULT_LOGIN },
     passwordVisible: false,
     authError: '',
     authDetails: {},
+    authNotice: pendingVerifyToken ? 'Verifying your email address...' : pendingResetToken ? 'Enter a new password to complete the reset.' : '',
     pendingInvite: null,
     pendingShareToken,
+    pendingVerifyToken,
+    pendingResetToken,
     visibility: null,
     sessions,
     activeSessionId: activeSession?.id || null,
@@ -418,6 +443,7 @@ export class SystemDesignStudio {
     window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
     window.addEventListener('pointerup', (event) => { void this.handlePointerUp(event); });
     this.render();
+    this.track('app.opened', { screen: this.state.screen });
     void this.bootstrapFromApi();
     this.startSharedSync();
   }
@@ -439,6 +465,18 @@ export class SystemDesignStudio {
     return this.api?.baseUrl || runtimeConfig.apiBaseUrl || this.baseUrl();
   }
 
+  track(event, properties = {}) {
+    if (typeof this.api?.trackEvent !== 'function') return;
+    const active = this.activeSession?.();
+    void this.api.trackEvent({
+      event,
+      sessionId: active?.id || this.state.activeSessionId || '',
+      role: this.state.role || 'interviewer',
+      path: this.location?.pathname || '/',
+      properties,
+    }).catch(() => {});
+  }
+
   saveUser(user) {
     writeStorage(this.storage, STORAGE_KEYS.user, user);
   }
@@ -449,6 +487,52 @@ export class SystemDesignStudio {
 
   async bootstrapFromApi() {
     try {
+      let accountActionHandled = false;
+      if (this.state.pendingVerifyToken) {
+        try {
+          const result = await this.api.verifyEmail({ token: this.state.pendingVerifyToken });
+          const verifiedUser = normalizeUser(result.user);
+          this.setState({
+            pendingVerifyToken: '',
+            authMode: 'login',
+            authNotice: 'Email verified. Sign in to continue.',
+            authError: '',
+            authDetails: {},
+            login: {
+              ...this.state.login,
+              name: verifiedUser?.name || this.state.login.name,
+              email: verifiedUser?.email || this.state.login.email,
+              password: '',
+            },
+            screen: 'login',
+          });
+          accountActionHandled = true;
+        } catch (error) {
+          this.setState({
+            pendingVerifyToken: '',
+            authMode: 'login',
+            authNotice: '',
+            authError: error.message,
+            authDetails: error.details || {},
+            screen: 'login',
+          });
+          accountActionHandled = true;
+        }
+      }
+
+      if (this.state.pendingResetToken) {
+        this.setState({
+          authMode: 'reset',
+          authNotice: 'Enter a new password to complete the reset.',
+          authError: '',
+          authDetails: {},
+          screen: 'login',
+        });
+        accountActionHandled = true;
+      }
+
+      if (accountActionHandled) return;
+
       if (this.state.pendingShareToken) {
         const invite = await this.api.share(this.state.pendingShareToken);
         const session = normalizeSession(invite.interview);
@@ -700,6 +784,7 @@ export class SystemDesignStudio {
         visibility: result.visibility || this.state.visibility,
       });
       this.toast('Review saved');
+      this.track('review.submitted', { decision, score: review.idealAssessment?.suggestedScore });
     } catch (error) {
       if (error.status === 409 && error.current) {
         this.applySessionToWorkspace(error.current, { saveState: 'conflict' });
@@ -742,6 +827,7 @@ export class SystemDesignStudio {
       const created = await this.api.createInterview(this.sessionPayloadFromDraft());
       const session = this.upsertSession(created.interview);
       const share = await this.api.shareInterview(session.id);
+      this.track('interview.created', { questionId: session.questionId, difficulty: session.difficulty });
       this.setState({
         shareLinks: share.links,
         candidateLink: share.links.candidate,
@@ -912,6 +998,7 @@ export class SystemDesignStudio {
       syncState: 'connecting',
       presence: { interviewer: 0, candidate: 0, panel: 0 },
     });
+    this.track('workspace.opened', { questionId: workspaceQuestion, role });
     this.connectSharedSocket();
   }
 
@@ -1066,8 +1153,12 @@ export class SystemDesignStudio {
 
   renderLogin() {
     const invite = this.state.pendingInvite;
-    const passwordIssues = this.state.authMode === 'signup' ? passwordValidationIssues(this.state.login.password) : [];
+    const mode = this.state.authMode;
+    const passwordIssues = ['signup', 'reset'].includes(mode) ? passwordValidationIssues(this.state.login.password) : [];
     const passwordDetails = this.state.authDetails?.password || passwordIssues;
+    const showPassword = mode !== 'forgot';
+    const showEmail = mode !== 'reset';
+    const primaryLabel = mode === 'forgot' ? 'Send reset link' : mode === 'reset' ? 'Set new password' : invite ? 'Continue to invite' : mode === 'signup' ? 'Create account' : 'Sign in';
     return `
       <div class="app dashboard auth-screen">
         <div class="auth-shell">
@@ -1083,37 +1174,44 @@ export class SystemDesignStudio {
               <div><strong>3</strong><span>Review the live architecture</span></div>
             </div>
             <div class="pill-row" style="margin-top:18px">
-              <button class="pill pill-button ${this.state.authMode === 'signup' ? 'active' : ''}" data-action="authMode" data-mode="signup">Create account</button>
-              <button class="pill pill-button ${this.state.authMode === 'login' ? 'active' : ''}" data-action="authMode" data-mode="login">Sign in</button>
+              <button class="pill pill-button ${mode === 'signup' ? 'active' : ''}" data-action="authMode" data-mode="signup">Create account</button>
+              <button class="pill pill-button ${mode === 'login' ? 'active' : ''}" data-action="authMode" data-mode="login">Sign in</button>
+              <button class="pill pill-button ${mode === 'forgot' || mode === 'reset' ? 'active' : ''}" data-action="authMode" data-mode="forgot">Forgot password</button>
             </div>
+            ${this.state.authNotice ? `<div class="notice" role="status" style="margin-top:14px">${esc(this.state.authNotice)}</div>` : ''}
             ${this.state.authError ? `
               <div class="auth-error" role="alert">
                 <strong>${esc(this.state.authError)}</strong>
                 ${(this.state.authDetails?.password || []).map((item) => `<div>${esc(item)}</div>`).join('')}
+                ${(this.state.authDetails?.email || []).map((item) => `<div>${esc(item)}</div>`).join('')}
               </div>` : ''}
-            ${this.state.authMode === 'signup' ? `<label style="display:block;margin-top:18px">
+            ${mode === 'signup' ? `<label style="display:block;margin-top:18px">
               <span class="mono-label">Name</span>
               <input class="field" data-login-field="name" autocomplete="name" value="${esc(this.state.login.name)}" placeholder="Neha Rao">
             </label>` : ''}
-            <label style="display:block;margin-top:12px">
+            ${showEmail ? `<label style="display:block;margin-top:12px">
               <span class="mono-label">Work email</span>
               <input class="field" data-login-field="email" autocomplete="email" value="${esc(this.state.login.email)}" placeholder="neha@example.com">
-            </label>
-            <label style="display:block;margin-top:12px">
-              <span class="mono-label">Password</span>
+            </label>` : ''}
+            ${showPassword ? `<label style="display:block;margin-top:12px">
+              <span class="mono-label">${mode === 'reset' ? 'New password' : 'Password'}</span>
               <span class="password-row">
-                <input class="field" data-login-field="password" type="${this.state.passwordVisible ? 'text' : 'password'}" autocomplete="${this.state.authMode === 'signup' ? 'new-password' : 'current-password'}" value="${esc(this.state.login.password)}" placeholder="At least 12 characters">
+                <input class="field" data-login-field="password" type="${this.state.passwordVisible ? 'text' : 'password'}" autocomplete="${mode === 'signup' || mode === 'reset' ? 'new-password' : 'current-password'}" value="${esc(this.state.login.password)}" placeholder="At least 12 characters">
                 <button class="btn" type="button" data-action="togglePasswordVisibility">${this.state.passwordVisible ? 'Hide' : 'Show'}</button>
               </span>
-            </label>
-            ${this.state.authMode === 'signup' ? `
+            </label>` : ''}
+            ${['signup', 'reset'].includes(mode) ? `
               <div class="password-rules">
                 <div class="${passwordDetails.includes('Use at least 12 characters') ? 'invalid' : 'valid'}" data-password-rule="minLength">
                   <span>${passwordDetails.includes('Use at least 12 characters') ? '!' : 'OK'}</span>
                   <span>Use at least 12 characters</span>
                 </div>
               </div>` : ''}
-            <button class="btn primary" style="width:100%;margin-top:16px" data-action="signIn">${invite ? 'Continue to invite' : this.state.authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
+            ${mode === 'forgot' ? `<button class="btn primary" style="width:100%;margin-top:16px" data-action="requestPasswordReset">${primaryLabel}</button>`
+              : mode === 'reset' ? `<button class="btn primary" style="width:100%;margin-top:16px" data-action="resetPassword">${primaryLabel}</button>`
+                : `<button class="btn primary" style="width:100%;margin-top:16px" data-action="signIn">${primaryLabel}</button>`}
+            ${mode === 'login' ? `<button class="pill pill-button" style="margin-top:10px" data-action="authMode" data-mode="forgot">Forgot password?</button>` : ''}
+            ${this.state.authError === 'Email verification required' || this.state.authDetails?.email?.length ? `<button class="pill pill-button" style="margin-top:10px" data-action="requestVerification">Resend verification email</button>` : ''}
             <div class="subtle" style="font-size:12px;margin-top:10px">Accounts and interviews are stored by the configured SystemDesign Studio API.</div>
             <div style="display:flex;gap:10px;margin-top:12px">
               <button class="pill pill-button" data-action="privacy">Privacy</button>
@@ -2090,6 +2188,9 @@ export class SystemDesignStudio {
     if (action === 'loginScreen') this.setState({ screen: 'login' });
     if (action === 'togglePasswordVisibility') this.togglePasswordVisibility();
     if (action === 'signIn') await this.signIn();
+    if (action === 'requestPasswordReset') await this.requestPasswordReset();
+    if (action === 'resetPassword') await this.resetPassword();
+    if (action === 'requestVerification') await this.requestVerification();
     if (action === 'signOut') await this.signOut();
     if (action === 'dashboard') {
       this.closeSharedSocket();
@@ -2175,7 +2276,7 @@ export class SystemDesignStudio {
 
   async signIn() {
     try {
-      this.setState({ authError: '', authDetails: {} });
+      this.setState({ authError: '', authDetails: {}, authNotice: '' });
       const body = {
         name: this.state.login.name,
         email: this.state.login.email,
@@ -2194,6 +2295,18 @@ export class SystemDesignStudio {
       const auth = this.state.authMode === 'login'
         ? await this.api.login(body)
         : await this.api.signup(body);
+      if (auth.verificationRequired) {
+        this.api.setToken('');
+        this.track('auth.signup_verification_required', { emailDomain: normalizeEmail(body.email).split('@')[1] || '' });
+        this.setState({
+          authMode: 'login',
+          login: { ...this.state.login, password: '' },
+          authError: '',
+          authDetails: {},
+          authNotice: 'Check your email to verify the account before signing in.',
+        });
+        return;
+      }
       this.api.setToken(auth.token);
       const user = normalizeUser(auth.user);
       this.saveUser(user);
@@ -2205,13 +2318,86 @@ export class SystemDesignStudio {
         login: { name: user.name, email: user.email, password: '' },
         authError: '',
         authDetails: {},
+        authNotice: '',
         sessions: this.state.pendingInvite
           ? [this.state.pendingInvite.session, ...sessions.filter((session) => session.id !== this.state.pendingInvite.session.id)]
           : sessions,
         screen: (this.state.pendingInvite || this.state.pendingShareToken) ? 'join' : 'dashboard',
       });
+      this.track(this.state.authMode === 'login' ? 'auth.login' : 'auth.signup', { invite: Boolean(this.state.pendingInvite || this.state.pendingShareToken) });
     } catch (error) {
-      this.setState({ authError: error.message, authDetails: error.details || {} });
+      this.setState({ authError: error.message, authDetails: error.details || {}, authNotice: '' });
+      this.toast(error.message);
+    }
+  }
+
+  async requestVerification() {
+    const email = normalizeEmail(this.state.login.email);
+    if (!email) {
+      this.setState({ authError: 'Email is required', authDetails: { email: ['Enter the email you used to sign up'] }, authNotice: '' });
+      return;
+    }
+    try {
+      await this.api.requestVerification({ email });
+      this.setState({
+        authError: '',
+        authDetails: {},
+        authNotice: 'Verification email sent. Check your inbox and then sign in.',
+      });
+      this.track('auth.verification_requested');
+    } catch (error) {
+      this.setState({ authError: error.message, authDetails: error.details || {}, authNotice: '' });
+      this.toast(error.message);
+    }
+  }
+
+  async requestPasswordReset() {
+    const email = normalizeEmail(this.state.login.email);
+    if (!email) {
+      this.setState({ authError: 'Email is required', authDetails: { email: ['Enter the account email to receive a reset link'] }, authNotice: '' });
+      return;
+    }
+    try {
+      await this.api.requestPasswordReset({ email });
+      this.setState({
+        authMode: 'login',
+        authError: '',
+        authDetails: {},
+        authNotice: 'If that account exists, a password reset link has been sent.',
+      });
+      this.track('auth.password_reset_requested');
+    } catch (error) {
+      this.setState({ authError: error.message, authDetails: error.details || {}, authNotice: '' });
+      this.toast(error.message);
+    }
+  }
+
+  async resetPassword() {
+    const issues = passwordValidationIssues(this.state.login.password);
+    if (issues.length) {
+      this.setState({
+        authError: 'Password does not meet the requirements',
+        authDetails: { password: issues },
+        authNotice: '',
+      });
+      return;
+    }
+    try {
+      await this.api.resetPassword({
+        token: this.state.pendingResetToken,
+        password: this.state.login.password,
+      });
+      this.setState({
+        authMode: 'login',
+        pendingResetToken: '',
+        login: { ...this.state.login, password: '' },
+        authError: '',
+        authDetails: {},
+        authNotice: 'Password updated. Sign in with the new password.',
+      });
+      this.track('auth.password_reset_completed');
+    } catch (error) {
+      this.setState({ authError: error.message, authDetails: error.details || {}, authNotice: '' });
       this.toast(error.message);
     }
   }

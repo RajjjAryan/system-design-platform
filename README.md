@@ -20,7 +20,9 @@ SystemDesign Studio is a production architecture simulator for system design int
 - Failure injection for Redis, Kafka, database, and traffic spikes
 - Interviewer-only AI hints panel
 - Frozen review mode with scorecard and final feedback
-- SQLite-backed interview persistence for the full-stack server
+- Managed Postgres persistence for production, with SQLite fallback for local single-instance use
+- Email verification and password reset through SMTP
+- Health/readiness endpoints, structured request logs, Sentry error monitoring, and database-backed product analytics events
 - Buildless ESM Worker artifact for static hosting
 
 ## Repository Structure
@@ -37,9 +39,10 @@ server/
   api-server.mjs    Node API + static server for full product mode
   index.js          Source Worker contract for static artifact compatibility
 Dockerfile          Container for full-stack deployment
-render.yaml         Render blueprint with persistent SQLite disk
+render.yaml         Render blueprint with managed Postgres wiring
 scripts/
   build.mjs         Builds dist/client and dist/server/index.js
+  migrate-sqlite-to-postgres.mjs  One-off SQLite to Postgres data migration helper
   validate-artifact.mjs
 tests/
   *.test.mjs        Node test suite
@@ -49,7 +52,11 @@ The full product path is the Node API server in `server/api-server.mjs`. The sta
 
 ## Local Development
 
-No dependency install is required.
+Install the production dependencies once:
+
+```sh
+npm install
+```
 
 ```sh
 npm test
@@ -66,10 +73,20 @@ Use these environment variables for deployed API instances:
 
 ```sh
 PORT=8787
-SDS_DB_PATH=.data/systemdesign.sqlite
+DATABASE_URL=postgres://...
 SDS_TOKEN_SECRET=replace-with-a-long-random-secret
 SDS_PUBLIC_ORIGIN=https://rajjjaryan.github.io/system-design-platform/
+SDS_REQUIRE_EMAIL_VERIFICATION=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=smtp-user
+SMTP_PASS=smtp-password
+SMTP_FROM="SystemDesign Studio <no-reply@example.com>"
+SENTRY_DSN=https://...
+SENTRY_ENVIRONMENT=production
 ```
+
+If `DATABASE_URL` is not set, the API falls back to `SDS_DB_PATH` SQLite storage. Use that only for local development or a single non-scaled instance.
 
 For frontend-only GitHub Pages, set `public/runtime-config.js` to the deployed API origin:
 
@@ -116,15 +133,12 @@ dist/
 
 This repo now has a real backend-compatible launch path:
 
-- Host the Node API (`npm start`) on a persistent Node 24 runtime with a mounted volume for `SDS_DB_PATH`.
-- Use `Dockerfile` directly, or import `render.yaml` on Render and set `SDS_PUBLIC_ORIGIN` to the frontend URL.
+- Host the Node API (`npm start`) on a persistent Node 24 runtime with `DATABASE_URL` pointing at managed Postgres.
+- Use `Dockerfile` directly, or import `render.yaml` on Render to provision the web service and Postgres database together.
 - Keep `SDS_TOKEN_SECRET` private and rotate it before production traffic.
+- Configure SMTP before enabling `SDS_REQUIRE_EMAIL_VERIFICATION=true`; otherwise signup and password reset requests intentionally fail closed.
+- Set `SENTRY_DSN` to enable server-side exception capture. `/api/health` and `/api/ready` are available for uptime checks.
+- Client usage events are posted to `/api/analytics/events` and stored in the database with bounded properties and hashed IPs.
 - Point GitHub Pages `public/runtime-config.js` at the deployed API, or serve the frontend from the Node API for same-origin deployment.
 - Keep GitHub Pages for the frontend only; it cannot provide server-side auth, durable storage, or role enforcement by itself.
 - Use the in-app Privacy and Terms pages as product defaults, then replace the copy with counsel-reviewed language before high-scale public marketing.
-
-Before broad public launch, add:
-
-- Managed Postgres or another hosted database instead of SQLite if multiple app instances are needed
-- Email verification and password reset
-- Error monitoring and analytics

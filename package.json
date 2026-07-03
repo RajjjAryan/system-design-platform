@@ -11,5 +11,10 @@
     "api": "node --no-warnings server/api-server.mjs",
     "start": "node --no-warnings server/api-server.mjs",
     "serve": "python3 -m http.server 4173 -d dist/client"
+  },
+  "dependencies": {
+    "@sentry/node": "^10.63.0",
+    "nodemailer": "^9.0.3",
+    "pg": "^8.22.0"
   }
 }

@@ -374,6 +374,15 @@ textarea:disabled {
   font-size: 12.5px;
 }
 
+.notice {
+  padding: 10px 12px;
+  border: 1px solid rgba(99, 102, 241, 0.34);
+  border-radius: 8px;
+  color: #c7d2fe;
+  background: rgba(49, 46, 129, 0.22);
+  font-size: 12.5px;
+}
+
 .password-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

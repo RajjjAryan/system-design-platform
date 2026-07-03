@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import {
   SystemDesignStudio,
+  createInitialState,
   createDefaultDraft,
   createSessionFromDraft,
 } from '../public/app.js';
@@ -54,6 +55,119 @@ function storage() {
 }
 
 const owner = { name: 'Neha Rao', email: 'neha@example.com' };
+
+{
+  const state = createInitialState({
+    storage: storage(),
+    location: new URL('https://studio.example.test/?reset=reset-token'),
+  });
+
+  assert.equal(state.screen, 'login');
+  assert.equal(state.authMode, 'reset');
+  assert.equal(state.pendingResetToken, 'reset-token');
+  assert.equal(state.authNotice, 'Enter a new password to complete the reset.');
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/?verify=verify-token'),
+    api: {
+      async verifyEmail(body) {
+        assert.deepEqual(body, { token: 'verify-token' });
+        return { verified: true, user: { name: 'Verified User', email: 'verified@example.com' } };
+      },
+      token() {
+        return '';
+      },
+    },
+  });
+
+  await app.bootstrapFromApi();
+
+  assert.equal(app.state.pendingVerifyToken, '');
+  assert.equal(app.state.authMode, 'login');
+  assert.equal(app.state.login.email, 'verified@example.com');
+  assert.equal(app.state.authNotice, 'Email verified. Sign in to continue.');
+}
+
+{
+  const calls = [];
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/?reset=reset-token'),
+    api: {
+      async resetPassword(body) {
+        calls.push(body);
+        return { reset: true };
+      },
+    },
+  });
+  app.state.login.password = 'new correct horse battery staple';
+
+  await app.resetPassword();
+
+  assert.deepEqual(calls, [{ token: 'reset-token', password: 'new correct horse battery staple' }]);
+  assert.equal(app.state.pendingResetToken, '');
+  assert.equal(app.state.authMode, 'login');
+  assert.equal(app.state.authNotice, 'Password updated. Sign in with the new password.');
+}
+
+{
+  const calls = [];
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      async requestPasswordReset(body) {
+        calls.push(body);
+        return { sent: true };
+      },
+    },
+  });
+  app.state.authMode = 'forgot';
+  app.state.login.email = 'neha@example.com';
+
+  await app.requestPasswordReset();
+
+  assert.deepEqual(calls, [{ email: 'neha@example.com' }]);
+  assert.equal(app.state.authMode, 'login');
+  assert.equal(app.state.authNotice, 'If that account exists, a password reset link has been sent.');
+}
+
+{
+  let tokenValue = 'not-called';
+  let interviewsCalled = false;
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      setToken(value) {
+        tokenValue = value;
+      },
+      async signup() {
+        return {
+          verificationRequired: true,
+          token: 'signup-token',
+          user: { name: 'Neha Rao', email: 'neha@example.com', emailVerified: false },
+        };
+      },
+      async interviews() {
+        interviewsCalled = true;
+        return { interviews: [] };
+      },
+    },
+  });
+  app.state.authMode = 'signup';
+  app.state.login = { name: 'Neha Rao', email: 'neha@example.com', password: 'correct horse battery staple' };
+
+  await app.signIn();
+
+  assert.equal(tokenValue, '');
+  assert.equal(interviewsCalled, false);
+  assert.equal(app.state.authMode, 'login');
+  assert.equal(app.state.authNotice, 'Check your email to verify the account before signing in.');
+}
 
 {
   const app = new SystemDesignStudio(root(), {

@@ -1,9 +1,12 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual, createHmac } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import * as Sentry from '@sentry/node';
+import nodemailer from 'nodemailer';
+
+import { createStore } from './store.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
@@ -22,10 +25,13 @@ const DEFAULT_PERMISSIONS = {
 const DEFAULT_SHARE_TTL_HOURS = 24 * 14;
 const MAX_BODY_BYTES = 512 * 1024;
 const MAX_ARCHITECTURE_BYTES = 256 * 1024;
+const MAX_ANALYTICS_PROPERTIES_BYTES = 16 * 1024;
 const DEFAULT_RATE_LIMITS = {
   auth: { limit: 40, windowMs: 60_000 },
   share: { limit: 240, windowMs: 60_000 },
 };
+const AUTH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24;
+const RESET_TOKEN_TTL_MS = 1000 * 60 * 30;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const contentTypes = {
@@ -71,6 +77,7 @@ function requiredString(value, name, min = 1) {
 function clientError(status, message, details = null) {
   const error = new Error(message);
   error.status = status;
+  error.expose = true;
   if (details) error.details = details;
   throw error;
 }
@@ -198,74 +205,6 @@ function websocketClose(socket) {
   }
 }
 
-function initDb(dbPath) {
-  mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS interviews (
-      id TEXT PRIMARY KEY,
-      owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      question_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      prompt TEXT NOT NULL,
-      candidate_name TEXT NOT NULL,
-      candidate_email TEXT NOT NULL,
-      difficulty TEXT NOT NULL,
-      duration INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      permissions_json TEXT NOT NULL,
-      architecture_json TEXT NOT NULL,
-      scores_json TEXT NOT NULL,
-      review_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_interviews_owner ON interviews(owner_user_id, updated_at DESC);
-    CREATE TABLE IF NOT EXISTS share_tokens (
-      token_hash TEXT PRIMARY KEY,
-      interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
-      role TEXT NOT NULL,
-      created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL,
-      expires_at TEXT,
-      revoked_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_share_tokens_interview ON share_tokens(interview_id);
-    CREATE TABLE IF NOT EXISTS interview_events (
-      id TEXT PRIMARY KEY,
-      interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL,
-      actor_role TEXT NOT NULL,
-      summary TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_interview_events_interview ON interview_events(interview_id, created_at DESC);
-    CREATE TABLE IF NOT EXISTS revoked_tokens (
-      token_hash TEXT PRIMARY KEY,
-      expires_at TEXT NOT NULL,
-      revoked_at TEXT NOT NULL
-    );
-  `);
-  const interviewColumns = new Set(db.prepare('PRAGMA table_info(interviews)').all().map((column) => column.name));
-  if (!interviewColumns.has('review_json')) {
-    db.exec("ALTER TABLE interviews ADD COLUMN review_json TEXT NOT NULL DEFAULT '{}'");
-  }
-  const shareColumns = new Set(db.prepare('PRAGMA table_info(share_tokens)').all().map((column) => column.name));
-  if (!shareColumns.has('revoked_at')) {
-    db.exec('ALTER TABLE share_tokens ADD COLUMN revoked_at TEXT');
-  }
-  return db;
-}
-
 function id(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${randomBytes(6).toString('base64url')}`;
 }
@@ -290,6 +229,24 @@ function assertObject(value, message) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     clientError(400, message);
   }
+}
+
+function analyticsEventName(value) {
+  const event = String(value || '').trim().slice(0, 80);
+  if (!event || !/^[a-z0-9][a-z0-9._:-]*$/i.test(event)) {
+    clientError(400, 'Analytics event is invalid', { event: ['Use a short event key like workspace.opened'] });
+  }
+  return event;
+}
+
+function analyticsProperties(value) {
+  if (value === undefined || value === null) return {};
+  assertObject(value, 'Analytics properties are invalid');
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_ANALYTICS_PROPERTIES_BYTES) {
+    clientError(413, 'Analytics properties are too large');
+  }
+  return value;
 }
 
 function requiredPayloadString(value, label, max = 160) {
@@ -371,15 +328,20 @@ function validateReviewPayload(status, review) {
   return { ...review, feedback };
 }
 
-function appendEvent(db, interviewId, kind, actorRole, summary, now = new Date().toISOString()) {
-  db.prepare('INSERT INTO interview_events (id, interview_id, kind, actor_role, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id('evt'), interviewId, kind, actorRole, summary, now);
+async function appendEvent(store, interviewId, kind, actorRole, summary, now = new Date().toISOString()) {
+  await store.appendEvent({
+    id: id('evt'),
+    interviewId,
+    kind,
+    actorRole,
+    summary,
+    createdAt: now,
+  });
 }
 
-function eventsForInterview(db, interviewId) {
-  if (!db || !interviewId) return [];
-  return db.prepare('SELECT kind, actor_role, summary, created_at FROM interview_events WHERE interview_id = ? ORDER BY created_at DESC LIMIT 25')
-    .all(interviewId)
+async function eventsForInterview(store, interviewId) {
+  if (!store || !interviewId) return [];
+  return (await store.listEvents(interviewId))
     .map((row) => ({
       kind: row.kind,
       role: row.actor_role,
@@ -394,11 +356,12 @@ function userRow(row) {
     id: row.id,
     name: row.name,
     email: row.email,
+    emailVerified: Boolean(row.email_verified_at),
     createdAt: row.created_at,
   };
 }
 
-function interviewRow(row, role = 'interviewer', db = null) {
+async function interviewRow(row, role = 'interviewer', store = null) {
   if (!row) return null;
   const permissions = { ...DEFAULT_PERMISSIONS, ...parseJson(row.permissions_json, {}) };
   const visibility = visibilityFor(role, permissions);
@@ -419,7 +382,7 @@ function interviewRow(row, role = 'interviewer', db = null) {
     architecture: visibility.canSeeArchitecture ? parseJson(row.architecture_json, null) : null,
     scores: visibility.canSeeScorecard ? parseJson(row.scores_json, {}) : undefined,
     review: visibility.canSeeScorecard ? parseJson(row.review_json, {}) : undefined,
-    events: visibility.canSeeArchitecture ? eventsForInterview(db, row.id) : undefined,
+    events: visibility.canSeeArchitecture && store ? (await eventsForInterview(store, row.id)) : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -463,12 +426,12 @@ function visibilityFor(role, permissions) {
   };
 }
 
-function userFromToken(token, db, tokenSecret) {
+async function userFromToken(token, store, tokenSecret) {
   const payload = verifyToken(token, tokenSecret);
   if (!payload?.sub) return null;
-  const revoked = db.prepare('SELECT expires_at FROM revoked_tokens WHERE token_hash = ?').get(hashToken(token));
+  const revoked = await store.getRevokedToken(hashToken(token));
   if (revoked && Date.parse(revoked.expires_at) > Date.now()) return null;
-  return userRow(db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub));
+  return userRow(await store.getUserById(payload.sub));
 }
 
 function cookieToken(req) {
@@ -484,12 +447,12 @@ function requestToken(req) {
   return bearer || cookieToken(req) || '';
 }
 
-function authUser(req, db, tokenSecret) {
-  return userFromToken(requestToken(req), db, tokenSecret);
+async function authUser(req, store, tokenSecret) {
+  return userFromToken(requestToken(req), store, tokenSecret);
 }
 
-function requireAuth(req, db, tokenSecret) {
-  const user = authUser(req, db, tokenSecret);
+async function requireAuth(req, store, tokenSecret) {
+  const user = await authUser(req, store, tokenSecret);
   if (!user) {
     const error = new Error('Authentication required');
     error.status = 401;
@@ -529,6 +492,98 @@ function createTokenForUser(user, tokenSecret) {
   return signToken({ sub: user.id, email: user.email, exp: Date.now() + 1000 * 60 * 60 * 24 * 30 }, tokenSecret);
 }
 
+function createOneTimeToken() {
+  return randomBytes(32).toString('base64url');
+}
+
+function publicLink(publicOrigin, params) {
+  const url = new URL(publicOrigin);
+  url.search = '';
+  url.hash = '';
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  return url.toString();
+}
+
+function isUniqueError(error) {
+  return String(error.message || '').includes('UNIQUE') || error.code === '23505';
+}
+
+function createMailer(options = {}) {
+  if (options.mailer) return options.mailer;
+  const host = process.env.SMTP_HOST;
+  const from = process.env.SMTP_FROM;
+  if (!host || !from) {
+    return { configured: false, async sendMail() { clientError(503, 'Email provider is not configured'); } };
+  }
+  const transport = nodemailer.createTransport({
+    host,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: process.env.SMTP_USER || process.env.SMTP_PASS ? {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    } : undefined,
+  });
+  return {
+    configured: true,
+    from,
+    async sendMail(message) {
+      return transport.sendMail({ from, ...message });
+    },
+  };
+}
+
+function emailUnavailableIfNeeded(context) {
+  if (!context.mailer?.configured) clientError(503, 'Email provider is not configured');
+}
+
+async function sendVerificationEmail(context, store, user) {
+  emailUnavailableIfNeeded(context);
+  const token = createOneTimeToken();
+  const now = new Date().toISOString();
+  await store.insertAuthToken({
+    tokenHash: hashToken(token),
+    userId: user.id,
+    type: 'email.verify',
+    createdAt: now,
+    expiresAt: new Date(Date.now() + AUTH_TOKEN_TTL_MS).toISOString(),
+  });
+  const link = publicLink(context.publicOrigin, { verify: token });
+  await context.mailer.sendMail({
+    to: user.email,
+    subject: 'Verify your SystemDesign Studio email',
+    text: `Verify your email: ${link}`,
+    html: `<p>Verify your SystemDesign Studio email:</p><p><a href="${link}">${link}</a></p>`,
+  });
+}
+
+async function sendPasswordResetEmail(context, store, user) {
+  emailUnavailableIfNeeded(context);
+  const token = createOneTimeToken();
+  const now = new Date().toISOString();
+  await store.insertAuthToken({
+    tokenHash: hashToken(token),
+    userId: user.id,
+    type: 'password.reset',
+    createdAt: now,
+    expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS).toISOString(),
+  });
+  const link = publicLink(context.publicOrigin, { reset: token });
+  await context.mailer.sendMail({
+    to: user.email,
+    subject: 'Reset your SystemDesign Studio password',
+    text: `Reset your password: ${link}`,
+    html: `<p>Reset your SystemDesign Studio password:</p><p><a href="${link}">${link}</a></p>`,
+  });
+}
+
+function requireActiveAuthToken(row) {
+  if (!row || Date.parse(row.expires_at) <= Date.now()) {
+    clientError(400, 'Token is invalid or expired');
+  }
+  return row;
+}
+
 function clientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown')
     .split(',')[0]
@@ -559,13 +614,8 @@ function enforceRateLimit(context, req, path) {
   }
 }
 
-function activeShareRow(db, token) {
-  return db.prepare(`
-    SELECT share_tokens.role, share_tokens.expires_at, share_tokens.revoked_at, interviews.*
-    FROM share_tokens
-    JOIN interviews ON interviews.id = share_tokens.interview_id
-    WHERE share_tokens.token_hash = ?
-  `).get(hashToken(token));
+async function activeShareRow(store, token) {
+  return store.getShareByTokenHash(hashToken(token));
 }
 
 function isShareInactive(share, now = Date.now()) {
@@ -593,12 +643,12 @@ function shareExpiryFromBody(body) {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
-function assertExpectedVersion(body, row, role, db) {
+async function assertExpectedVersion(body, row, role, store) {
   if (!body.expectedUpdatedAt) return;
   if (String(body.expectedUpdatedAt) === String(row.updated_at)) return;
   const error = new Error('Interview changed since you loaded it');
   error.status = 409;
-  error.current = interviewRow(row, role, db);
+  error.current = await interviewRow(row, role, store);
   throw error;
 }
 
@@ -627,7 +677,8 @@ function defaultScores() {
 }
 
 async function routeApi(req, res, context) {
-  const { db, tokenSecret, publicOrigin } = context;
+  const { tokenSecret, publicOrigin } = context;
+  const store = await context.storePromise;
   const url = new URL(req.url, 'http://localhost');
   const path = url.pathname;
   const cors = corsHeaders(req, publicOrigin);
@@ -639,26 +690,85 @@ async function routeApi(req, res, context) {
   }
   enforceRateLimit(context, req, path);
 
+  if (req.method === 'GET' && path === '/api/health') {
+    json(res, 200, {
+      status: 'ok',
+      uptime: Math.round(process.uptime()),
+      database: { provider: store.provider },
+      email: { configured: Boolean(context.mailer?.configured) },
+      monitoring: { sentry: Boolean(context.sentryEnabled) },
+      analytics: { provider: 'database' },
+    }, cors);
+    return;
+  }
+
+  if (req.method === 'GET' && path === '/api/ready') {
+    try {
+      await store.healthCheck();
+      json(res, 200, { ready: true, database: { provider: store.provider } }, cors);
+    } catch {
+      json(res, 503, { ready: false }, cors);
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/analytics/events') {
+    const body = await readBody(req);
+    const user = await authUser(req, store, tokenSecret);
+    await store.insertAnalyticsEvent({
+      id: id('ae'),
+      event: analyticsEventName(body.event),
+      userId: user?.id || null,
+      sessionId: String(body.sessionId || '').trim().slice(0, 120),
+      role: String(body.role || '').trim().slice(0, 40),
+      path: String(body.path || '').trim().slice(0, 220),
+      properties: analyticsProperties(body.properties),
+      ipHash: hashToken(clientIp(req)),
+      createdAt: new Date().toISOString(),
+    });
+    json(res, 202, { accepted: true }, cors);
+    return;
+  }
+
   if (req.method === 'POST' && path === '/api/auth/signup') {
     const body = await readBody(req);
     const name = requiredString(body.name, 'name');
     const email = requiredEmail(body.email);
     const password = requiredSignupPassword(body.password);
     const now = new Date().toISOString();
-    const user = { id: id('usr'), name, email, createdAt: now };
+    if (context.requireEmailVerification) emailUnavailableIfNeeded(context);
+    const user = {
+      id: id('usr'),
+      name,
+      email,
+      emailVerifiedAt: context.requireEmailVerification ? null : now,
+      createdAt: now,
+    };
     try {
-      db.prepare('INSERT INTO users (id, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(user.id, user.name, user.email, hashPassword(password), now);
+      await store.insertUser({ ...user, passwordHash: hashPassword(password) });
     } catch (error) {
-      if (String(error.message).includes('UNIQUE')) {
+      if (isUniqueError(error)) {
         const duplicate = new Error('Email is already registered');
         duplicate.status = 409;
         throw duplicate;
       }
       throw error;
     }
+    if (context.requireEmailVerification || context.sendVerificationOnSignup) {
+      await sendVerificationEmail(context, store, user);
+    }
     const token = createTokenForUser(user, tokenSecret);
-    json(res, 201, { user, token }, cors);
+    json(res, 201, {
+      user: userRow({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        email_verified_at: user.emailVerifiedAt,
+        created_at: user.createdAt,
+      }),
+      token,
+      verificationRequired: context.requireEmailVerification,
+    }, cors);
     return;
   }
 
@@ -666,15 +776,61 @@ async function routeApi(req, res, context) {
     const body = await readBody(req);
     const email = requiredEmail(body.email);
     const password = requiredString(body.password, 'password');
-    const row = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const row = await store.getUserByEmail(email);
     if (!row || !verifyPassword(password, row.password_hash)) {
       const error = new Error('Invalid email or password');
       error.status = 401;
       throw error;
     }
+    if (context.requireEmailVerification && !row.email_verified_at) {
+      clientError(403, 'Email verification required', { email: ['Verify your email before signing in'] });
+    }
     const user = userRow(row);
     const token = createTokenForUser(user, tokenSecret);
     json(res, 200, { user, token }, cors);
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/auth/request-verification') {
+    const body = await readBody(req);
+    const email = requiredEmail(body.email);
+    const user = await store.getUserByEmail(email);
+    if (user && !user.email_verified_at) await sendVerificationEmail(context, store, userRow(user));
+    json(res, 202, { sent: true }, cors);
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/auth/verify-email') {
+    const body = await readBody(req);
+    const token = requiredString(body.token, 'token');
+    const row = requireActiveAuthToken(await store.getActiveAuthToken(hashToken(token), 'email.verify'));
+    const now = new Date().toISOString();
+    await store.markEmailVerified(row.user_id, now);
+    await store.useAuthToken(hashToken(token), now);
+    const user = userRow(await store.getUserById(row.user_id));
+    json(res, 200, { verified: true, user }, cors);
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/auth/request-password-reset') {
+    const body = await readBody(req);
+    const email = requiredEmail(body.email);
+    emailUnavailableIfNeeded(context);
+    const user = await store.getUserByEmail(email);
+    if (user) await sendPasswordResetEmail(context, store, userRow(user));
+    json(res, 202, { sent: true }, cors);
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/auth/reset-password') {
+    const body = await readBody(req);
+    const token = requiredString(body.token, 'token');
+    const password = requiredSignupPassword(body.password);
+    const row = requireActiveAuthToken(await store.getActiveAuthToken(hashToken(token), 'password.reset'));
+    const now = new Date().toISOString();
+    await store.updatePassword(row.user_id, hashPassword(password));
+    await store.useAuthToken(hashToken(token), now);
+    json(res, 200, { reset: true }, cors);
     return;
   }
 
@@ -688,27 +844,26 @@ async function routeApi(req, res, context) {
     }
     const now = new Date().toISOString();
     const expiresAt = new Date(payload.exp || Date.now()).toISOString();
-    db.prepare('INSERT OR REPLACE INTO revoked_tokens (token_hash, expires_at, revoked_at) VALUES (?, ?, ?)')
-      .run(hashToken(token), expiresAt, now);
+    await store.revokeToken(hashToken(token), expiresAt, now);
     json(res, 200, { revoked: true }, cors);
     return;
   }
 
   if (req.method === 'GET' && path === '/api/me') {
-    const user = requireAuth(req, db, tokenSecret);
+    const user = await requireAuth(req, store, tokenSecret);
     json(res, 200, { user }, cors);
     return;
   }
 
   if (req.method === 'GET' && path === '/api/interviews') {
-    const user = requireAuth(req, db, tokenSecret);
-    const rows = db.prepare('SELECT * FROM interviews WHERE owner_user_id = ? ORDER BY updated_at DESC').all(user.id);
-    json(res, 200, { interviews: rows.map((row) => interviewRow(row, 'interviewer', db)) }, cors);
+    const user = await requireAuth(req, store, tokenSecret);
+    const rows = await store.listInterviewsByOwner(user.id);
+    json(res, 200, { interviews: await Promise.all(rows.map((row) => interviewRow(row, 'interviewer', store))) }, cors);
     return;
   }
 
   if (req.method === 'POST' && path === '/api/interviews') {
-    const user = requireAuth(req, db, tokenSecret);
+    const user = await requireAuth(req, store, tokenSecret);
     const body = await readBody(req);
     const now = new Date().toISOString();
     const permissions = { ...DEFAULT_PERMISSIONS, ...(body.permissions || {}) };
@@ -729,59 +884,37 @@ async function routeApi(req, res, context) {
       createdAt: now,
       updatedAt: now,
     };
-    db.prepare(`
-      INSERT INTO interviews (
-        id, owner_user_id, question_id, title, prompt, candidate_name, candidate_email,
-        difficulty, duration, status, permissions_json, architecture_json, scores_json, review_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      interview.id,
-      interview.ownerUserId,
-      interview.questionId,
-      interview.title,
-      interview.prompt,
-      interview.candidateName,
-      interview.candidateEmail,
-      interview.difficulty,
-      interview.duration,
-      interview.status,
-      JSON.stringify(interview.permissions),
-      JSON.stringify(interview.architecture),
-      JSON.stringify(interview.scores),
-      JSON.stringify(body.review || {}),
-	      interview.createdAt,
-	      interview.updatedAt,
-	    );
-    appendEvent(db, interview.id, 'created', 'interviewer', 'Interview workspace created', now);
-    const row = db.prepare('SELECT * FROM interviews WHERE id = ?').get(interview.id);
-    json(res, 201, { interview: interviewRow(row, 'interviewer', db) }, cors);
+    await store.insertInterview(interview, body.review || {});
+    await appendEvent(store, interview.id, 'created', 'interviewer', 'Interview workspace created', now);
+    const row = await store.getInterviewById(interview.id);
+    json(res, 201, { interview: await interviewRow(row, 'interviewer', store) }, cors);
     return;
   }
 
   const interviewPatch = path.match(/^\/api\/interviews\/([^/]+)$/);
   if (interviewPatch && req.method === 'DELETE') {
-    const user = requireAuth(req, db, tokenSecret);
+    const user = await requireAuth(req, store, tokenSecret);
     const interviewId = interviewPatch[1];
-    const row = db.prepare('SELECT id FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+    const row = await store.getInterviewForOwner(interviewId, user.id);
     if (!row) {
       json(res, 404, { error: 'Interview not found' }, cors);
       return;
     }
-    db.prepare('DELETE FROM interviews WHERE id = ? AND owner_user_id = ?').run(interviewId, user.id);
+    await store.deleteInterviewForOwner(interviewId, user.id);
     json(res, 200, { deleted: true, interviewId }, cors);
     return;
   }
 
   if (interviewPatch && req.method === 'PATCH') {
-    const user = requireAuth(req, db, tokenSecret);
+    const user = await requireAuth(req, store, tokenSecret);
     const interviewId = interviewPatch[1];
-    const row = db.prepare('SELECT * FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+    const row = await store.getInterviewForOwner(interviewId, user.id);
     if (!row) {
       json(res, 404, { error: 'Interview not found' }, cors);
       return;
     }
     const body = await readBody(req);
-    assertExpectedVersion(body, row, 'interviewer', db);
+    await assertExpectedVersion(body, row, 'interviewer', store);
     const permissions = { ...parseJson(row.permissions_json, {}), ...(body.permissions || {}) };
     const status = body.status || row.status;
     const review = validateReviewPayload(status, body.review || parseJson(row.review_json, {}));
@@ -799,73 +932,58 @@ async function routeApi(req, res, context) {
       review,
       updatedAt: new Date().toISOString(),
     };
-    db.prepare(`
-      UPDATE interviews
-      SET title = ?, prompt = ?, candidate_name = ?, candidate_email = ?, difficulty = ?, duration = ?,
-          status = ?, permissions_json = ?, architecture_json = ?, scores_json = ?, review_json = ?, updated_at = ?
-      WHERE id = ? AND owner_user_id = ?
-    `).run(
-      updated.title,
-      updated.prompt,
-      updated.candidateName,
-      updated.candidateEmail,
-      updated.difficulty,
-      updated.duration,
-      updated.status,
-      JSON.stringify(updated.permissions),
-      JSON.stringify(updated.architecture),
-      JSON.stringify(updated.scores),
-      JSON.stringify(updated.review),
-      updated.updatedAt,
-      interviewId,
-      user.id,
-	    );
-    const next = db.prepare('SELECT * FROM interviews WHERE id = ?').get(interviewId);
-    appendEvent(db, interviewId, updated.status === 'reviewed' ? 'reviewed' : 'updated', 'interviewer', updated.status === 'reviewed' ? 'Final review submitted' : 'Workspace updated', updated.updatedAt);
+    await store.updateInterviewForOwner(interviewId, user.id, updated);
+    const next = await store.getInterviewById(interviewId);
+    await appendEvent(store, interviewId, updated.status === 'reviewed' ? 'reviewed' : 'updated', 'interviewer', updated.status === 'reviewed' ? 'Final review submitted' : 'Workspace updated', updated.updatedAt);
     context.broadcastInterviewUpdate(interviewId, updated.updatedAt);
-    json(res, 200, { interview: interviewRow(next, 'interviewer', db) }, cors);
+    json(res, 200, { interview: await interviewRow(next, 'interviewer', store) }, cors);
     return;
   }
 
   const shareMatch = path.match(/^\/api\/interviews\/([^/]+)\/share$/);
   if (shareMatch && req.method === 'DELETE') {
-    const user = requireAuth(req, db, tokenSecret);
+    const user = await requireAuth(req, store, tokenSecret);
     const interviewId = shareMatch[1];
-    const row = db.prepare('SELECT * FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+    const row = await store.getInterviewForOwner(interviewId, user.id);
     if (!row) {
       json(res, 404, { error: 'Interview not found' }, cors);
       return;
     }
     const now = new Date().toISOString();
-    const result = db.prepare('UPDATE share_tokens SET revoked_at = ? WHERE interview_id = ? AND revoked_at IS NULL')
-      .run(now, interviewId);
-    appendEvent(db, interviewId, 'share.revoked', 'interviewer', 'Active share links revoked', now);
-    json(res, 200, { revoked: true, count: result.changes || 0 }, cors);
+    const count = await store.revokeShareTokens(interviewId, now);
+    await appendEvent(store, interviewId, 'share.revoked', 'interviewer', 'Active share links revoked', now);
+    json(res, 200, { revoked: true, count }, cors);
     return;
   }
 
   if (shareMatch && req.method === 'POST') {
-    const user = requireAuth(req, db, tokenSecret);
+    const user = await requireAuth(req, store, tokenSecret);
     const interviewId = shareMatch[1];
-    const row = db.prepare('SELECT * FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+    const row = await store.getInterviewForOwner(interviewId, user.id);
     if (!row) {
       json(res, 404, { error: 'Interview not found' }, cors);
       return;
-	    }
+    }
     const body = await readBody(req);
     const tokens = {};
     const links = {};
     const now = new Date().toISOString();
     const expiresAt = shareExpiryFromBody(body);
-    db.prepare('UPDATE share_tokens SET revoked_at = ? WHERE interview_id = ? AND revoked_at IS NULL').run(now, interviewId);
+    await store.revokeShareTokens(interviewId, now);
     for (const role of ['candidate', 'interviewer', 'panel']) {
       const token = randomBytes(32).toString('base64url');
-      db.prepare('INSERT INTO share_tokens (token_hash, interview_id, role, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(hashToken(token), interviewId, role, user.id, now, expiresAt);
+      await store.insertShareToken({
+        tokenHash: hashToken(token),
+        interviewId,
+        role,
+        createdBy: user.id,
+        createdAt: now,
+        expiresAt,
+      });
       tokens[role] = token;
       links[role] = shareUrl(publicOrigin, token);
     }
-    appendEvent(db, interviewId, 'share.generated', 'interviewer', 'Fresh role-based share links generated', now);
+    await appendEvent(store, interviewId, 'share.generated', 'interviewer', 'Fresh role-based share links generated', now);
     json(res, 200, { links, tokens, expiresAt }, cors);
     return;
   }
@@ -873,7 +991,7 @@ async function routeApi(req, res, context) {
   const shareLookup = path.match(/^\/api\/share\/([^/]+)$/);
   if (shareLookup && (req.method === 'GET' || req.method === 'PATCH')) {
     const token = shareLookup[1];
-    const share = activeShareRow(db, token);
+    const share = await activeShareRow(store, token);
     if (!assertActiveShare(share, cors, res)) return;
     const permissions = { ...DEFAULT_PERMISSIONS, ...parseJson(share.permissions_json, {}) };
     const visibility = visibilityFor(share.role, permissions);
@@ -881,31 +999,30 @@ async function routeApi(req, res, context) {
       if (!visibility.canEditCanvas) {
         json(res, 403, { error: 'This role cannot edit the canvas' }, cors);
         return;
-	    }
+      }
       const body = await readBody(req);
-      assertExpectedVersion(body, share, share.role, db);
+      await assertExpectedVersion(body, share, share.role, store);
       const architecture = architectureFromBody(body, parseJson(share.architecture_json, defaultArchitecture()));
       const canUpdateReview = share.role === 'interviewer';
       const status = canUpdateReview && body.status ? body.status : share.status;
       const scores = canUpdateReview && body.scores ? body.scores : parseJson(share.scores_json, defaultScores());
       const review = validateReviewPayload(status, canUpdateReview && body.review ? body.review : parseJson(share.review_json, {}));
       const updatedAt = new Date().toISOString();
-      db.prepare('UPDATE interviews SET architecture_json = ?, scores_json = ?, review_json = ?, status = ?, updated_at = ? WHERE id = ?')
-        .run(JSON.stringify(architecture), JSON.stringify(scores), JSON.stringify(review), status, updatedAt, share.id);
-      appendEvent(db, share.id, status === 'reviewed' ? 'reviewed' : 'updated', share.role, status === 'reviewed' ? 'Final review submitted from share link' : `Workspace updated by ${share.role}`, updatedAt);
+      await store.updateSharedInterview(share.id, { architecture, scores, review, status, updatedAt });
+      await appendEvent(store, share.id, status === 'reviewed' ? 'reviewed' : 'updated', share.role, status === 'reviewed' ? 'Final review submitted from share link' : `Workspace updated by ${share.role}`, updatedAt);
       context.broadcastInterviewUpdate(share.id, updatedAt);
-      const next = activeShareRow(db, token);
+      const next = await activeShareRow(store, token);
       json(res, 200, {
         role: next.role,
         visibility,
-        interview: interviewRow(next, next.role, db),
+        interview: await interviewRow(next, next.role, store),
       }, cors);
       return;
     }
     json(res, 200, {
       role: share.role,
       visibility,
-      interview: interviewRow(share, share.role, db),
+      interview: await interviewRow(share, share.role, store),
     }, cors);
     return;
   }
@@ -913,20 +1030,21 @@ async function routeApi(req, res, context) {
   json(res, 404, { error: 'Route not found' }, cors);
 }
 
-function authorizeWebSocket(req, interviewId, context) {
-  const { db, tokenSecret } = context;
+async function authorizeWebSocket(req, interviewId, context) {
+  const { tokenSecret } = context;
+  const store = await context.storePromise;
   const url = new URL(req.url, 'http://localhost');
   const shareToken = url.searchParams.get('share') || '';
   if (shareToken) {
-    const share = db.prepare('SELECT interview_id, role, expires_at, revoked_at FROM share_tokens WHERE token_hash = ?').get(hashToken(shareToken));
-    if (share?.interview_id !== interviewId || isShareInactive(share)) return null;
+    const share = await store.getShareByTokenHash(hashToken(shareToken));
+    if (share?.id !== interviewId || isShareInactive(share)) return null;
     return { role: share.role, interviewId, userId: `share:${hashToken(shareToken).slice(0, 12)}` };
   }
 
   const authToken = url.searchParams.get('auth') || cookieToken(req) || '';
-  const user = userFromToken(authToken, db, tokenSecret);
+  const user = await userFromToken(authToken, store, tokenSecret);
   if (!user) return null;
-  const row = db.prepare('SELECT id FROM interviews WHERE id = ? AND owner_user_id = ?').get(interviewId, user.id);
+  const row = await store.getInterviewForOwner(interviewId, user.id);
   return row ? { role: 'interviewer', interviewId, userId: user.id } : null;
 }
 
@@ -938,7 +1056,7 @@ function presenceFor(sockets) {
   return presence;
 }
 
-function handleWebSocketUpgrade(req, socket, head, context) {
+async function handleWebSocketUpgrade(req, socket, head, context) {
   const url = new URL(req.url, 'http://localhost');
   const match = url.pathname.match(/^\/api\/ws\/interviews\/([^/]+)$/);
   const key = req.headers['sec-websocket-key'];
@@ -948,7 +1066,7 @@ function handleWebSocketUpgrade(req, socket, head, context) {
   }
 
   const interviewId = decodeURIComponent(match[1]);
-  const auth = authorizeWebSocket(req, interviewId, context);
+  const auth = await authorizeWebSocket(req, interviewId, context);
   if (!auth) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
     socket.destroy();
@@ -1009,12 +1127,53 @@ function serveStatic(req, res) {
   res.end(readFileSync(filePath));
 }
 
+function initSentry(options = {}) {
+  const dsn = options.sentryDsn || process.env.SENTRY_DSN || '';
+  if (!dsn) return false;
+  Sentry.init({
+    dsn,
+    environment: options.sentryEnvironment || process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || 'development',
+    tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE || 0.05),
+  });
+  return true;
+}
+
+function logRequest(req, res, startedAt, error = null) {
+  const url = new URL(req.url, 'http://localhost');
+  const record = {
+    level: error ? 'error' : 'info',
+    type: 'http_request',
+    method: req.method,
+    path: url.pathname,
+    status: res.statusCode,
+    durationMs: Math.round(Number(process.hrtime.bigint() - startedAt) / 1_000_000),
+    requestId: req.headers['x-request-id'] || req.headers['x-railway-request-id'] || '',
+  };
+  if (error) record.error = error.message;
+  console.log(JSON.stringify(record));
+}
+
+function requireEmailVerification(options) {
+  if (typeof options.requireEmailVerification === 'boolean') return options.requireEmailVerification;
+  return process.env.SDS_REQUIRE_EMAIL_VERIFICATION === 'true';
+}
+
 export function createApiServer(options = {}) {
-  const db = initDb(options.dbPath || process.env.SDS_DB_PATH || join(rootDir, '.data', 'systemdesign.sqlite'));
+  const sentryEnabled = initSentry(options);
+  const storePromise = options.store
+    ? Promise.resolve(options.store)
+    : createStore({
+      dbPath: options.dbPath || process.env.SDS_DB_PATH || join(rootDir, '.data', 'systemdesign.sqlite'),
+      databaseUrl: options.databaseUrl,
+    });
   const context = {
-    db,
+    storePromise,
     publicOrigin: options.publicOrigin || process.env.SDS_PUBLIC_ORIGIN || 'http://127.0.0.1:8787/',
     tokenSecret: resolveTokenSecret(options),
+    mailer: createMailer(options),
+    requireEmailVerification: requireEmailVerification(options),
+    sendVerificationOnSignup: Boolean(options.sendVerificationOnSignup) || process.env.SDS_SEND_VERIFICATION_ON_SIGNUP === 'true',
+    sentryEnabled,
     webSockets: new Map(),
     rateLimitStore: new Map(),
     rateLimits: { ...DEFAULT_RATE_LIMITS, ...(options.rateLimits || {}) },
@@ -1036,27 +1195,41 @@ export function createApiServer(options = {}) {
   };
 
   const server = createServer(async (req, res) => {
+    const startedAt = process.hrtime.bigint();
     try {
       if (req.url.startsWith('/api/')) {
         await routeApi(req, res, context);
+        logRequest(req, res, startedAt);
         return;
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         text(res, 405, 'Method not allowed');
+        logRequest(req, res, startedAt);
         return;
       }
       serveStatic(req, res);
+      logRequest(req, res, startedAt);
     } catch (error) {
       const status = error.status || 500;
+      res.statusCode = status;
+      if (sentryEnabled && status >= 500) Sentry.captureException(error);
       json(res, status, {
-        error: status >= 500 ? 'Internal server error' : error.message,
+        error: status >= 500 && !error.expose ? 'Internal server error' : error.message,
         ...(status < 500 && error.details ? { details: error.details } : {}),
         ...(status === 409 && error.current ? { current: error.current } : {}),
       }, corsHeaders(req, context.publicOrigin));
+      logRequest(req, res, startedAt, error);
     }
   });
   server.on('upgrade', (req, socket, head) => {
-    handleWebSocketUpgrade(req, socket, head, context);
+    handleWebSocketUpgrade(req, socket, head, context).catch((error) => {
+      if (sentryEnabled) Sentry.captureException(error);
+      socket.write('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+    });
+  });
+  server.on('close', () => {
+    context.storePromise.then((store) => store.close?.()).catch(() => {});
   });
   return server;
 }

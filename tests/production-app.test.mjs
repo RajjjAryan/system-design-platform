@@ -32,6 +32,9 @@ assert.equal(pkg.type, 'module', 'package.json must use ESM');
 assert.equal(pkg.scripts.build, 'node scripts/build.mjs');
 assert.equal(pkg.scripts.test, 'node --no-warnings --test tests/*.test.mjs');
 assert.equal(pkg.scripts.validate, 'node scripts/validate-artifact.mjs');
+assert.equal(pkg.dependencies.pg.startsWith('^'), true, 'Postgres support must be a production dependency');
+assert.equal(pkg.dependencies.nodemailer.startsWith('^'), true, 'SMTP email support must be a production dependency');
+assert.equal(pkg.dependencies['@sentry/node'].startsWith('^'), true, 'Sentry monitoring support must be a production dependency');
 
 const html = read('public/index.html');
 for (const snippet of [
@@ -92,3 +95,11 @@ const response = await distWorker.default.fetch(new Request('https://example.tes
 assert.equal(response.status, 200);
 const body = await response.text();
 assert.ok(body.includes('SystemDesign Studio'), 'Worker root route must serve the app HTML');
+
+const dockerfile = read('Dockerfile');
+assert.ok(dockerfile.includes('npm ci --omit=dev'), 'Docker image must install production dependencies');
+
+const envExample = read('.env.example');
+for (const envName of ['DATABASE_URL', 'SMTP_HOST', 'SMTP_FROM', 'SENTRY_DSN']) {
+  assert.ok(envExample.includes(envName), `.env.example must document ${envName}`);
+}

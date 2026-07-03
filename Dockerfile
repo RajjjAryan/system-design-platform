@@ -7,6 +7,9 @@ ENV PORT=8787
 ENV SDS_DB_PATH=/app/.data/systemdesign.sqlite
 
 COPY package.json ./
+COPY package-lock.json ./
+RUN npm ci --omit=dev
+
 COPY public ./public
 COPY server ./server
 
