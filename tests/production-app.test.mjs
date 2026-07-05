@@ -6,12 +6,17 @@ const read = (path) => readFileSync(path, 'utf8');
 
 const requiredFiles = [
   'package.json',
+  '.env.example',
   '.openai/hosting.json',
+  'Dockerfile',
+  'render.yaml',
   'public/index.html',
+  'public/runtime-config.js',
   'public/styles.css',
   'public/app.js',
   'public/sds-data.js',
   'public/sds-knowledge.js',
+  'server/api-server.mjs',
   'server/index.js',
   'scripts/build.mjs',
   'scripts/validate-artifact.mjs',
@@ -25,14 +30,18 @@ for (const file of requiredFiles) {
 const pkg = JSON.parse(read('package.json'));
 assert.equal(pkg.type, 'module', 'package.json must use ESM');
 assert.equal(pkg.scripts.build, 'node scripts/build.mjs');
-assert.equal(pkg.scripts.test, 'node --test tests/*.test.mjs');
+assert.equal(pkg.scripts.test, 'node --no-warnings --test tests/*.test.mjs');
 assert.equal(pkg.scripts.validate, 'node scripts/validate-artifact.mjs');
+assert.equal(pkg.dependencies.pg.startsWith('^'), true, 'Postgres support must be a production dependency');
+assert.equal(pkg.dependencies.nodemailer.startsWith('^'), true, 'SMTP email support must be a production dependency');
+assert.equal(pkg.dependencies['@sentry/node'].startsWith('^'), true, 'Sentry monitoring support must be a production dependency');
 
 const html = read('public/index.html');
 for (const snippet of [
   'SystemDesign Studio',
   '<main id="app"',
   'public/styles.css',
+  'public/runtime-config.js',
   'public/app.js',
 ]) {
   assert.ok(html.includes(snippet), `Expected public/index.html to include ${snippet}`);
@@ -46,15 +55,28 @@ for (const snippet of [
   'renderInspector',
   'renderDiagnostics',
   'renderReview',
+  'renderLegalPage',
   'injectScenario',
   'Architecture health',
   'Create interview',
   'Finish & review',
+  'data-action="privacy"',
+  'data-action="terms"',
 ]) {
   assert.ok(app.includes(snippet), `Expected public/app.js to include ${snippet}`);
 }
 
-assert.doesNotMatch(app, /\bTODO\b|TBD|mock only|placeholder/i, 'App source must not contain placeholder markers');
+assert.doesNotMatch(app, /\bTODO\b|TBD|mock only/i, 'App source must not contain incomplete markers');
+
+const repoText = [
+  read('README.md'),
+  read('plan.md'),
+  read('figma-generation-spec.md'),
+  read('tests/create-interview-flow.test.mjs'),
+].join('\n');
+
+assert.doesNotMatch(repoText, /SystemDesign Studio Platform|SystemDesign\.dc\.html|Candidate: Priya S\.|prototype source/, 'Repo docs/tests must not reference deleted prototype artifacts');
+assert.doesNotMatch(read('server/api-server.mjs'), /dev-secret-change-me/, 'API server must not ship a hard-coded token secret fallback');
 
 const appModule = await import('../public/app.js?source-test=' + Date.now());
 assert.equal(typeof appModule.SystemDesignStudio, 'function', 'App module must be importable and export SystemDesignStudio');
@@ -73,3 +95,11 @@ const response = await distWorker.default.fetch(new Request('https://example.tes
 assert.equal(response.status, 200);
 const body = await response.text();
 assert.ok(body.includes('SystemDesign Studio'), 'Worker root route must serve the app HTML');
+
+const dockerfile = read('Dockerfile');
+assert.ok(dockerfile.includes('npm ci --omit=dev'), 'Docker image must install production dependencies');
+
+const envExample = read('.env.example');
+for (const envName of ['DATABASE_URL', 'SMTP_HOST', 'SMTP_FROM', 'SENTRY_DSN']) {
+  assert.ok(envExample.includes(envName), `.env.example must document ${envName}`);
+}

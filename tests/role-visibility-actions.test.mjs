@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const source = readFileSync('public/app.js', 'utf8');
+
+const requiredSnippets = [
+  "screen === 'login'",
+  "screen === 'join'",
+  'data-action="signIn"',
+  'data-action="signOut"',
+  'data-action="copyShareLink"',
+  'data-action="acceptInvite"',
+  'data-action="authMode"',
+  'data-session-field="candidateName"',
+  'data-session-field="candidateEmail"',
+  'data-permission="${esc(key)}"',
+  "'allowCandidateEdit'",
+  "'showHealthToCandidate'",
+  'data-role-link="${esc(role)}"',
+  "'candidate'",
+  "'interviewer'",
+  'this.canEdit()',
+  'this.canInjectFailures()',
+  'this.api.createInterview',
+  'this.api.shareInterview',
+  'clipboard.writeText',
+  'undoWorkspaceAction',
+  'redoWorkspaceAction',
+  'handleKeyUp',
+  'spacePan',
+  'resetView',
+];
+
+for (const snippet of requiredSnippets) {
+  assert.ok(source.includes(snippet), `Expected app source to include ${JSON.stringify(snippet)}`);
+}
+
+assert.doesNotMatch(source, /Good afternoon, Aarav|Candidate: Priya S\.|systemdesign\.studio\/i\//);
+assert.doesNotMatch(source, /data-action="previewRole"|Candidate screen|Interviewer screen|rolePreview/);
+assert.doesNotMatch(source, /data-action="tool" data-tool="select"|data-action="zoomOut"|data-action="zoomIn"/);
