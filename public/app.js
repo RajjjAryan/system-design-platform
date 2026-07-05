@@ -425,6 +425,11 @@ export class SystemDesignStudio {
     this.sharedSocketUrl = '';
     this.reconnectTimer = null;
     this.suppressNextStartConnectionClick = false;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.historyRestoring = false;
+    this.spacePan = false;
+    this.clipboardComponent = null;
   }
 
   mount() {
@@ -440,6 +445,7 @@ export class SystemDesignStudio {
     this.root.addEventListener('dblclick', (event) => this.handleDoubleClick(event));
     this.root.addEventListener('wheel', (event) => this.handleWheel(event), { passive: false });
     window.addEventListener('keydown', (event) => this.handleKeyDown(event));
+    window.addEventListener('keyup', (event) => this.handleKeyUp(event));
     window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
     window.addEventListener('pointerup', (event) => { void this.handlePointerUp(event); });
     this.render();
@@ -927,6 +933,7 @@ export class SystemDesignStudio {
   startNewInterviewSetup(questionId = this.state.question || 'twitter') {
     const question = questionById(questionId);
     this.closeSharedSocket();
+    this.resetWorkspaceHistory();
     this.setState({
       screen: 'setup',
       question: question.id,
@@ -966,6 +973,7 @@ export class SystemDesignStudio {
     const canvas = session?.architecture || { comps: [], edges: [], comments: [] };
     const workspaceQuestion = session?.questionId || question;
     const role = options.role || this.state.role || 'interviewer';
+    this.resetWorkspaceHistory();
     this.setState({
       screen: 'workspace',
       question: workspaceQuestion,
@@ -1082,8 +1090,144 @@ export class SystemDesignStudio {
     return Boolean(active.prompt && spec?.statement && active.prompt.trim() !== spec.statement.trim());
   }
 
+  resetWorkspaceHistory() {
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+
+  workspaceSnapshot() {
+    return {
+      comps: this.state.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+      edges: this.state.edges.map((edge) => ({ ...edge })),
+      comments: this.state.comments.map((comment) => ({ ...comment })),
+      broken: [...this.state.broken],
+      traffic: this.state.traffic,
+      constraints: [...this.state.constraints],
+      selectedId: this.state.selectedId,
+      selectedEdgeId: this.state.selectedEdgeId,
+      inspectorTab: this.state.inspectorTab,
+    };
+  }
+
+  snapshotsEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  pushHistory() {
+    if (this.historyRestoring || !['workspace', 'review'].includes(this.state.screen)) return false;
+    if (!this.canEdit() && !this.canInjectFailures()) return false;
+    const snapshot = this.workspaceSnapshot();
+    const last = this.undoStack[this.undoStack.length - 1];
+    if (last && this.snapshotsEqual(last, snapshot)) return false;
+    this.undoStack.push(snapshot);
+    if (this.undoStack.length > 60) this.undoStack.shift();
+    this.redoStack = [];
+    return true;
+  }
+
+  restoreWorkspaceSnapshot(snapshot) {
+    this.historyRestoring = true;
+    this.setState({
+      comps: snapshot.comps.map((component) => ({ ...component, props: { ...(component.props || {}) } })),
+      edges: snapshot.edges.map((edge) => ({ ...edge })),
+      comments: snapshot.comments.map((comment) => ({ ...comment })),
+      broken: [...snapshot.broken],
+      traffic: snapshot.traffic,
+      constraints: [...snapshot.constraints],
+      selectedId: snapshot.selectedId,
+      selectedEdgeId: snapshot.selectedEdgeId,
+      inspectorTab: snapshot.inspectorTab || 'general',
+      connectionStartId: null,
+      connectionPreview: null,
+      renamingId: null,
+      editingEdgeId: null,
+    });
+    this.historyRestoring = false;
+  }
+
+  undoWorkspaceAction() {
+    if (!this.undoStack.length) return false;
+    const current = this.workspaceSnapshot();
+    const previous = this.undoStack.pop();
+    this.redoStack.push(current);
+    this.restoreWorkspaceSnapshot(previous);
+    void this.persistArchitecture();
+    return true;
+  }
+
+  redoWorkspaceAction() {
+    if (!this.redoStack.length) return false;
+    const current = this.workspaceSnapshot();
+    const next = this.redoStack.pop();
+    this.undoStack.push(current);
+    this.restoreWorkspaceSnapshot(next);
+    void this.persistArchitecture();
+    return true;
+  }
+
   setZoom(value) {
     this.setState({ zoom: Math.round(clamp(Number(value) || 1, 0.5, 2) * 100) / 100 });
+  }
+
+  resetView() {
+    this.setState({ zoom: 1, pan: { x: 0, y: 0 } });
+  }
+
+  clearCanvasSelection() {
+    this.setState({
+      selectedId: null,
+      selectedEdgeId: null,
+      renamingId: null,
+      editingEdgeId: null,
+      connectionStartId: null,
+      connectionPreview: null,
+    });
+  }
+
+  copySelection() {
+    const selected = this.selectedComponent();
+    if (!selected) return false;
+    this.clipboardComponent = { ...selected, props: { ...(selected.props || {}) } };
+    return true;
+  }
+
+  pasteSelection() {
+    if (!this.clipboardComponent || !this.canEdit()) return false;
+    this.pushHistory();
+    const source = this.clipboardComponent;
+    const id = `c${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const pasted = {
+      ...source,
+      id,
+      x: Math.round((source.x || 0) + 36),
+      y: Math.round((source.y || 0) + 36),
+      props: { ...(source.props || {}) },
+    };
+    this.setState({
+      comps: [...this.state.comps, pasted],
+      selectedId: id,
+      selectedEdgeId: null,
+    });
+    void this.persistArchitecture();
+    return true;
+  }
+
+  duplicateSelected() {
+    return this.copySelection() && this.pasteSelection();
+  }
+
+  nudgeSelected(dx, dy) {
+    if (!this.state.selectedId || !this.canEdit()) return false;
+    if (!this.state.comps.some((component) => component.id === this.state.selectedId)) return false;
+    this.pushHistory();
+    this.setState({
+      comps: this.state.comps.map((component) => component.id === this.state.selectedId
+        ? { ...component, x: Math.round((component.x || 0) + dx), y: Math.round((component.y || 0) + dy) }
+        : component),
+      selectedEdgeId: null,
+    });
+    void this.persistArchitecture();
+    return true;
   }
 
   async refreshActiveSession({ force = false } = {}) {
@@ -1605,27 +1749,10 @@ export class SystemDesignStudio {
         </div>
         <div class="divider"></div>
         ${isWorkspace ? `
-          <button class="btn icon-btn ${this.state.tool === 'select' ? 'active' : ''}" data-action="tool" data-tool="select" title="Select">${this.icon('search', 16)}</button>
-          <button class="btn icon-btn ${this.state.tool === 'pan' ? 'active' : ''}" data-action="tool" data-tool="pan" title="Pan">${this.icon('net', 16)}</button>
-          <button class="btn icon-btn ${this.state.tool === 'connect' ? 'active' : ''}" data-action="tool" data-tool="connect" title="Connect">${this.icon('stream', 16)}</button>
-          <button class="btn icon-btn ${this.state.tool === 'comment' ? 'active' : ''}" data-action="tool" data-tool="comment" title="Comment">${this.icon('bell', 16)}</button>
-          <button class="btn icon-btn" data-action="zoomOut" title="Zoom out">-</button>
-          <span class="pill role-pill">${Math.round((this.state.zoom || 1) * 100)}%</span>
-          <button class="btn icon-btn" data-action="zoomIn" title="Zoom in">+</button>
           <span class="pill role-pill">${esc(ROLE_LABELS[role] || role)}</span>
+          <span class="pill role-pill">${Math.round((this.state.zoom || 1) * 100)}%</span>
+          <span class="pill role-pill">${esc(this.state.syncState || 'offline')}</span>
           <div class="spacer"></div>
-          ${this.canInjectFailures() ? `
-            <span class="mono-label toolbar-label">Simulate</span>
-            <button class="btn danger" data-action="breakSelected">Break</button>
-            <button class="btn ${this.state.traffic ? 'active' : ''}" data-action="traffic" data-value="1000">Traffic ${this.state.traffic ? 'x' + this.state.traffic : ''}</button>
-            <button class="btn" data-action="injectScenario" data-scenario="redis">Redis down</button>
-            <button class="btn optional-wide" data-action="injectScenario" data-scenario="kafka">Kafka down</button>
-            <button class="btn optional-wide" data-action="injectScenario" data-scenario="db">DB outage</button>
-            <button class="btn" data-action="resetSimulation">Reset</button>
-          ` : ''}
-          <div class="spacer"></div>
-          ${this.canViewAiHints() ? '<button class="btn" data-action="toggleAi">AI hints</button>' : ''}
-          ${this.canSubmitReview() ? `<button class="btn ${this.state.idealOpen ? 'active' : ''}" data-action="toggleIdealSolution">Ideal solution</button>` : ''}
           ${this.visibility().canSeeScorecard ? '<button class="btn primary" data-action="review">Finish & review</button>' : ''}`
 	      : `
 	          <div class="spacer"></div>
@@ -1865,9 +1992,34 @@ export class SystemDesignStudio {
             ].map(([a, b]) => `<div class="card stat"><div class="subtle">${a}</div><strong>${b}</strong></div>`).join('')}
           </div>
           <div style="margin-top:16px">${health.dims.map((dim) => this.metricRow(dim.name, dim.value.toFixed(1), `${Math.round(dim.value / 5 * 100)}%`, dim.value < 3)).join('')}</div>
+          ${this.renderWorkspaceControlPanel()}
           <button class="btn" style="width:100%;margin-top:10px" data-action="toggleProblems">Open diagnostics (${this.diagnostics().length})</button>
         </div>
       </aside>`;
+  }
+
+  renderWorkspaceControlPanel() {
+    const scenarios = this.canInjectFailures() ? `
+      <div class="card stat workspace-controls">
+        <div class="mono-label">Scenarios</div>
+        <div class="compact-actions">
+          <button class="btn danger" data-action="breakSelected" ${this.state.selectedId ? '' : 'disabled'}>${this.state.selectedId && this.state.broken.includes(this.state.selectedId) ? 'Restore selected' : 'Break selected'}</button>
+          <button class="btn ${this.state.traffic ? 'active' : ''}" data-action="traffic" data-value="1000">Traffic ${this.state.traffic ? `x${this.state.traffic}` : 'spike'}</button>
+          <button class="btn" data-action="injectScenario" data-scenario="redis">Redis down</button>
+          <button class="btn" data-action="injectScenario" data-scenario="kafka">Kafka down</button>
+          <button class="btn" data-action="injectScenario" data-scenario="db">DB outage</button>
+          <button class="btn" data-action="resetSimulation">Reset</button>
+        </div>
+      </div>` : '';
+    const references = this.canViewAiHints() || this.canSubmitReview() ? `
+      <div class="card stat workspace-controls">
+        <div class="mono-label">Reference</div>
+        <div class="compact-actions">
+          ${this.canViewAiHints() ? '<button class="btn" data-action="toggleAi">AI hints</button>' : ''}
+          ${this.canSubmitReview() ? `<button class="btn ${this.state.idealOpen ? 'active' : ''}" data-action="toggleIdealSolution">Ideal solution</button>` : ''}
+        </div>
+      </div>` : '';
+    return `${scenarios}${references}`;
   }
 
   idealSolution() {
@@ -2264,8 +2416,8 @@ export class SystemDesignStudio {
     if (action === 'tool') this.setState({ tool: target.dataset.tool });
     if (action === 'zoomOut') this.setZoom((this.state.zoom || 1) - 0.25);
     if (action === 'zoomIn') this.setZoom((this.state.zoom || 1) + 0.25);
-    if (action === 'traffic' && this.canInjectFailures()) this.setState({ traffic: this.state.traffic ? 0 : Number(target.dataset.value || 1000), problemsOpen: true });
-    if (action === 'resetSimulation' && this.canInjectFailures()) this.setState({ traffic: 0, broken: [], constraints: [], problemsOpen: false });
+    if (action === 'traffic') this.toggleTraffic(Number(target.dataset.value || 1000));
+    if (action === 'resetSimulation') this.resetSimulation();
     if (action === 'injectScenario') this.injectScenario(target.dataset.scenario);
     if (action === 'breakSelected') this.toggleBreakSelected();
     if (action === 'deleteSelected') this.deleteSelected();
@@ -2473,16 +2625,129 @@ export class SystemDesignStudio {
     const editable = event.target?.closest?.('input, textarea, select, [contenteditable="true"]');
     if (editable) return;
 
-    if (event.key === 'Escape' && this.state.connectionStartId) {
+    const key = String(event.key || '').toLowerCase();
+    const mod = Boolean(event.metaKey || event.ctrlKey);
+    const inWorkspace = ['workspace', 'review'].includes(this.state.screen);
+
+    if (inWorkspace && mod && key === 'z') {
       event.preventDefault?.();
-      this.setState({ connectionStartId: null, tool: 'select' });
+      if (event.shiftKey) this.redoWorkspaceAction();
+      else this.undoWorkspaceAction();
+      return;
+    }
+
+    if (inWorkspace && mod && key === 'y') {
+      event.preventDefault?.();
+      this.redoWorkspaceAction();
+      return;
+    }
+
+    if (inWorkspace && mod && key === 's') {
+      event.preventDefault?.();
+      void this.persistArchitecture();
+      return;
+    }
+
+    if (inWorkspace && mod && key === 'c' && this.copySelection()) {
+      event.preventDefault?.();
+      return;
+    }
+
+    if (inWorkspace && mod && key === 'v' && this.pasteSelection()) {
+      event.preventDefault?.();
+      return;
+    }
+
+    if (inWorkspace && mod && key === 'd' && this.duplicateSelected()) {
+      event.preventDefault?.();
+      return;
+    }
+
+    if (inWorkspace && mod && (event.key === '+' || event.key === '=')) {
+      event.preventDefault?.();
+      this.setZoom((this.state.zoom || 1) + 0.1);
+      return;
+    }
+
+    if (inWorkspace && mod && event.key === '-') {
+      event.preventDefault?.();
+      this.setZoom((this.state.zoom || 1) - 0.1);
+      return;
+    }
+
+    if (inWorkspace && mod && event.key === '0') {
+      event.preventDefault?.();
+      this.resetView();
+      return;
+    }
+
+    const arrowDeltas = {
+      arrowup: [0, -1],
+      arrowdown: [0, 1],
+      arrowleft: [-1, 0],
+      arrowright: [1, 0],
+    };
+    if (this.state.screen === 'workspace' && !mod && arrowDeltas[key] && this.state.selectedId) {
+      const multiplier = event.shiftKey ? 10 : 1;
+      const [dx, dy] = arrowDeltas[key];
+      if (this.nudgeSelected(dx * multiplier, dy * multiplier)) event.preventDefault?.();
+      return;
+    }
+
+    if (this.state.screen === 'workspace' && !mod && key === 'enter') {
+      if (this.state.selectedId && this.canEdit()) {
+        event.preventDefault?.();
+        this.beginRename(this.state.selectedId);
+        return;
+      }
+      if (this.state.selectedEdgeId && this.canEdit()) {
+        event.preventDefault?.();
+        this.beginEdgeProtocolEdit(this.state.selectedEdgeId);
+        return;
+      }
+    }
+
+    if ((event.key === ' ' || event.code === 'Space') && this.state.screen === 'workspace') {
+      event.preventDefault?.();
+      this.spacePan = true;
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault?.();
+      if (this.state.connectionStartId || this.state.aiOpen || this.state.idealOpen || this.state.problemsOpen || this.state.editingEdgeId) {
+        this.setState({
+          connectionStartId: null,
+          connectionPreview: null,
+          editingEdgeId: null,
+          aiOpen: false,
+          idealOpen: false,
+          problemsOpen: false,
+          tool: 'select',
+        });
+      } else if (this.state.selectedId || this.state.selectedEdgeId || this.state.renamingId) {
+        this.clearCanvasSelection();
+      }
       return;
     }
 
     if ((event.key === 'Delete' || event.key === 'Backspace') && (this.state.selectedId || this.state.selectedEdgeId)) {
       event.preventDefault?.();
       this.deleteSelected();
+      return;
     }
+
+    if (!mod && this.state.screen === 'workspace') {
+      if (key === 'v') this.setState({ tool: 'select' });
+      if (key === 'h') this.setState({ tool: 'pan' });
+      if (key === 'c' && this.canEdit()) this.setState({ tool: 'connect' });
+      if (key === 't' && this.canEdit()) this.setState({ tool: 'comment' });
+      if (key === 'd') this.setState({ problemsOpen: !this.state.problemsOpen });
+    }
+  }
+
+  handleKeyUp(event) {
+    if (event.key === ' ' || event.code === 'Space') this.spacePan = false;
   }
 
   handleDoubleClick(event) {
@@ -2587,6 +2852,7 @@ export class SystemDesignStudio {
     }
     const field = event.target.closest('[data-field]');
     if (field && this.state.selectedId && this.canEdit()) {
+      this.pushHistory();
       const value = field.type === 'checkbox' ? field.checked : field.value;
       this.state.comps = this.state.comps.map((component) => {
         if (component.id !== this.state.selectedId) return component;
@@ -2598,6 +2864,7 @@ export class SystemDesignStudio {
     }
     const edgeField = event.target.closest('[data-edge-field]');
     if (edgeField && this.state.selectedEdgeId && this.canEdit()) {
+      this.pushHistory();
       const value = edgeField.type === 'checkbox' ? edgeField.checked : edgeField.value;
       this.state.edges = this.state.edges.map((edge) => edge.id === this.state.selectedEdgeId ? { ...edge, [edgeField.dataset.edgeField]: value } : edge);
       this.render();
@@ -2634,6 +2901,7 @@ export class SystemDesignStudio {
       return;
     }
     const id = this.state.renamingId;
+    this.pushHistory();
     this.setState({
       comps: this.state.comps.map((component) => component.id === id ? { ...component, type: nextName } : component),
       selectedId: id,
@@ -2657,6 +2925,7 @@ export class SystemDesignStudio {
   commitEdgeProtocol(protocol) {
     if (!this.state.editingEdgeId || !this.canEdit()) return;
     const nextProtocol = EDGE_PROTOCOLS.includes(protocol) ? protocol : 'HTTP';
+    this.pushHistory();
     this.setState({
       edges: this.state.edges.map((edge) => edge.id === this.state.editingEdgeId
         ? { ...edge, protocol: nextProtocol, badge: nextProtocol }
@@ -2700,7 +2969,8 @@ export class SystemDesignStudio {
   }
 
   handlePointerDown(event) {
-    if (event.button && event.button !== 0) return;
+    const isMiddleButton = event.button === 1;
+    if (event.button && event.button !== 0 && !isMiddleButton) return;
     const connect = event.target.closest('.node-connect');
     if (connect && this.canEdit()) {
       const nodeId = connect.dataset.nodeId || event.target.closest('[data-node-id]')?.dataset.nodeId;
@@ -2722,7 +2992,8 @@ export class SystemDesignStudio {
     }
     if (event.target.closest('[data-rename-input], button, input, textarea, select')) return;
     const canvas = event.target.closest('[data-canvas]');
-    if (this.state.tool === 'pan' && canvas) {
+    const backgroundCanvas = canvas && !event.target.closest('[data-node-id], [data-comment-id], .edge-label, .question-panel, .diag-panel');
+    if ((this.state.tool === 'pan' || this.spacePan || isMiddleButton || (this.state.tool === 'select' && backgroundCanvas)) && canvas) {
       event.preventDefault?.();
       this.drag = { kind: 'pan', x: event.clientX, y: event.clientY, ox: this.state.pan.x, oy: this.state.pan.y };
       return;
@@ -2733,7 +3004,8 @@ export class SystemDesignStudio {
     const component = this.state.comps.find((item) => item.id === node.dataset.nodeId);
     if (!component) return;
     event.preventDefault?.();
-    this.drag = { kind: 'node', id: component.id, x: event.clientX, y: event.clientY, ox: component.x, oy: component.y };
+    const historyPushed = this.pushHistory();
+    this.drag = { kind: 'node', id: component.id, x: event.clientX, y: event.clientY, ox: component.x, oy: component.y, moved: false, historyPushed };
   }
 
   handlePointerMove(event) {
@@ -2747,6 +3019,7 @@ export class SystemDesignStudio {
     }
     if (this.drag.kind === 'node') {
       const zoom = this.state.zoom || 1;
+      this.drag.moved = true;
       this.state.comps = this.state.comps.map((component) => component.id === this.drag.id ? { ...component, x: Math.round(this.drag.ox + dx / zoom), y: Math.round(this.drag.oy + dy / zoom) } : component);
       this.render();
       return;
@@ -2760,7 +3033,10 @@ export class SystemDesignStudio {
   async handlePointerUp(event = {}) {
     const finished = this.drag;
     this.drag = null;
-    if (finished?.kind === 'node') await this.persistArchitecture();
+    if (finished?.kind === 'node') {
+      if (finished.moved) await this.persistArchitecture();
+      else if (finished.historyPushed) this.undoStack.pop();
+    }
     if (finished?.kind === 'edge') {
       const targetId = event.target?.closest?.('[data-node-id]')?.dataset.nodeId;
       if (targetId && targetId !== finished.id) {
@@ -2772,9 +3048,15 @@ export class SystemDesignStudio {
   }
 
   handleCanvasClick(event) {
-    if (this.state.tool !== 'comment' || !this.canEdit()) return;
     const canvas = event.target.closest('[data-canvas]');
-    if (!canvas || event.target.closest('[data-node-id], [data-comment-id], .edge-label')) return;
+    if (!canvas || event.target.closest('[data-node-id], [data-comment-id], .edge-label, .question-panel, .diag-panel')) return;
+    if (this.state.tool !== 'comment') {
+      if (this.state.selectedId || this.state.selectedEdgeId || this.state.connectionStartId || this.state.editingEdgeId) {
+        this.clearCanvasSelection();
+      }
+      return;
+    }
+    if (!this.canEdit()) return;
     const rect = canvas.getBoundingClientRect();
     const point = this.canvasPoint(event.clientX, event.clientY, rect);
     this.addCanvasComment(point.x, point.y);
@@ -2800,6 +3082,7 @@ export class SystemDesignStudio {
     if (!name || !cat || !this.canEdit()) return;
     const id = `c${Date.now()}`;
     const position = x === null || y === null ? this.nextComponentPosition() : { x, y };
+    this.pushHistory();
     this.setState({
       comps: [...this.state.comps, { id, type: name, cat, x: Math.round(position.x), y: Math.round(position.y), w: 150, props: {} }],
       selectedId: id,
@@ -2824,6 +3107,7 @@ export class SystemDesignStudio {
 
   finishConnection(fromId, toId) {
     if (!fromId || !toId || !this.byId()[fromId] || !this.byId()[toId] || fromId === toId) return;
+    this.pushHistory();
     const edge = {
       id: `e${Date.now()}`,
       from: fromId,
@@ -2852,6 +3136,7 @@ export class SystemDesignStudio {
 
   addTextBox(x, y) {
     if (!this.canEdit()) return;
+    this.pushHistory();
     const comment = {
       id: `note-${Date.now()}`,
       x: Math.round(x),
@@ -2880,8 +3165,21 @@ export class SystemDesignStudio {
 
   deleteComment(commentId) {
     if (!commentId || !this.canEdit()) return;
+    this.pushHistory();
     this.setState({ comments: this.state.comments.filter((comment) => comment.id !== commentId) });
     void this.persistArchitecture();
+  }
+
+  toggleTraffic(value = 1000) {
+    if (!this.canInjectFailures()) return;
+    this.pushHistory();
+    this.setState({ traffic: this.state.traffic ? 0 : Number(value || 1000), problemsOpen: true });
+  }
+
+  resetSimulation() {
+    if (!this.canInjectFailures()) return;
+    this.pushHistory();
+    this.setState({ traffic: 0, broken: [], constraints: [], problemsOpen: false });
   }
 
   injectScenario(id) {
@@ -2894,6 +3192,7 @@ export class SystemDesignStudio {
       spike: { traffic: 1000, text: 'Traffic x1000 spike' },
     };
     const scenario = scenarios[id] || scenarios.spike;
+    this.pushHistory();
     this.setState({
       broken: scenario.broken ? Array.from(new Set([...this.state.broken, ...scenario.broken])) : this.state.broken,
       traffic: scenario.traffic || this.state.traffic,
@@ -2907,6 +3206,7 @@ export class SystemDesignStudio {
     if (!this.canInjectFailures()) return;
     const id = this.state.selectedId;
     if (!id) return;
+    this.pushHistory();
     const broken = this.state.broken.includes(id)
       ? this.state.broken.filter((item) => item !== id)
       : [...this.state.broken, id];
@@ -2918,6 +3218,7 @@ export class SystemDesignStudio {
     if (!this.canEdit()) return;
     if (this.state.selectedId) {
       const id = this.state.selectedId;
+      this.pushHistory();
       this.setState({
         comps: this.state.comps.filter((item) => item.id !== id),
         edges: this.state.edges.filter((edge) => edge.from !== id && edge.to !== id),
@@ -2926,6 +3227,7 @@ export class SystemDesignStudio {
       void this.persistArchitecture();
     }
     if (this.state.selectedEdgeId) {
+      this.pushHistory();
       this.setState({ edges: this.state.edges.filter((edge) => edge.id !== this.state.selectedEdgeId), selectedEdgeId: null });
       void this.persistArchitecture();
     }

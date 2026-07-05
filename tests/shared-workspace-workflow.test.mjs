@@ -375,12 +375,15 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
   const topbar = app.renderTopbar('workspace');
   const canvas = app.renderCanvas();
 
-  assert.equal(topbar.includes('data-action="zoomOut"'), true);
-  assert.equal(topbar.includes('data-action="zoomIn"'), true);
+  assert.equal(topbar.includes('data-action="zoomOut"'), false);
+  assert.equal(topbar.includes('data-action="zoomIn"'), false);
+  assert.equal(topbar.includes('data-action="tool"'), false);
+  assert.equal(topbar.includes('data-action="injectScenario"'), false);
   assert.equal(topbar.includes('100%'), true);
   assert.equal(canvas.includes('scale(${this.state.zoom})'), false);
   assert.equal(canvas.includes('scale(1)'), true);
   assert.equal(canvas.includes('data-action="startConnection"'), true);
+  assert.equal(app.renderHealthPanel().includes('data-action="injectScenario"'), true);
 
   app.setZoom(1.25);
   assert.equal(app.state.zoom, 1.25);
@@ -531,6 +534,274 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
   assert.equal(app.state.edges.length, 0);
   assert.equal(app.state.selectedEdgeId, null);
   assert.equal(persisted.length, 1);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [];
+
+  app.addComponent('Redis', 'Caching');
+  assert.equal(app.state.comps.length, 1);
+
+  let prevented = false;
+  app.handleKeyDown({
+    key: 'z',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {
+      prevented = true;
+    },
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(app.state.comps.length, 0);
+
+  app.handleKeyDown({
+    key: 'z',
+    metaKey: true,
+    shiftKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.comps.length, 1);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [{ id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120, props: { replicas: '2' } }];
+  app.state.selectedId = 'api';
+
+  let copied = false;
+  app.handleKeyDown({
+    key: 'c',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {
+      copied = true;
+    },
+  });
+
+  assert.equal(copied, true);
+
+  app.handleKeyDown({
+    key: 'v',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.comps.length, 2);
+  assert.notEqual(app.state.selectedId, 'api');
+  assert.equal(app.selectedComponent().x, 136);
+  assert.equal(app.selectedComponent().props.replicas, '2');
+
+  app.handleKeyDown({
+    key: 'z',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.comps.length, 1);
+
+  app.handleKeyDown({
+    key: 'd',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.comps.length, 2);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [{ id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 }];
+  app.state.selectedId = 'api';
+
+  app.handleKeyDown({
+    key: 'ArrowRight',
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  assert.equal(app.state.comps[0].x, 101);
+
+  app.handleKeyDown({
+    key: 'ArrowDown',
+    shiftKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  assert.equal(app.state.comps[0].y, 130);
+
+  app.handleKeyDown({
+    key: 'z',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  assert.equal(app.state.comps[0].y, 120);
+
+  app.handleKeyDown({
+    key: 'Enter',
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  assert.equal(app.state.renamingId, 'api');
+}
+
+{
+  const persisted = [];
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {
+      async updateInterview(id, body) {
+        persisted.push({ id, body });
+        return { interview: app.activeSession() };
+      },
+    },
+  });
+  const session = createSessionFromDraft({ user: owner, draft: createDefaultDraft(owner, 'payment'), questionId: 'payment' });
+  app.state.sessions = [session];
+  app.state.activeSessionId = session.id;
+  app.state.screen = 'workspace';
+
+  app.handleKeyDown({
+    key: 's',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  await Promise.resolve();
+
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].id, session.id);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.zoom = 1;
+  app.state.pan = { x: 24, y: 18 };
+
+  app.handleKeyDown({
+    key: '=',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  assert.equal(app.state.zoom, 1.1);
+
+  app.handleKeyDown({
+    key: '0',
+    metaKey: true,
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  assert.equal(app.state.zoom, 1);
+  assert.deepEqual(app.state.pan, { x: 0, y: 0 });
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.pan = { x: 0, y: 0 };
+  const { target } = canvasTarget();
+
+  app.handleKeyDown({
+    key: ' ',
+    code: 'Space',
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+  assert.equal(app.spacePan, true);
+
+  app.handlePointerDown({
+    button: 0,
+    clientX: 120,
+    clientY: 90,
+    target,
+    preventDefault() {},
+  });
+  app.handlePointerMove({ clientX: 160, clientY: 115 });
+
+  assert.deepEqual(app.state.pan, { x: 40, y: 25 });
+
+  app.handleKeyUp({ key: ' ', code: 'Space' });
+  assert.equal(app.spacePan, false);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [{ id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 }];
+  app.state.connectionStartId = 'api';
+  app.state.connectionPreview = { x: 200, y: 160 };
+  app.state.aiOpen = true;
+  app.state.idealOpen = true;
+  app.state.problemsOpen = true;
+  app.state.editingEdgeId = 'edge-1';
+
+  app.handleKeyDown({
+    key: 'Escape',
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.connectionStartId, null);
+  assert.equal(app.state.connectionPreview, null);
+  assert.equal(app.state.aiOpen, false);
+  assert.equal(app.state.idealOpen, false);
+  assert.equal(app.state.problemsOpen, false);
+  assert.equal(app.state.editingEdgeId, null);
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [{ id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 }];
+  app.state.selectedId = 'api';
+
+  app.handleKeyDown({
+    key: 'Escape',
+    target: eventTargetWithClosest(),
+    preventDefault() {},
+  });
+
+  assert.equal(app.state.selectedId, null);
 }
 
 {
@@ -699,7 +970,8 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
     { id: 'cache', type: 'Redis', cat: 'Storage', x: 480, y: 120 },
   ];
 
-  assert.equal(app.renderTopbar('workspace').includes('data-action="toggleIdealSolution"'), true);
+  assert.equal(app.renderTopbar('workspace').includes('data-action="toggleIdealSolution"'), false);
+  assert.equal(app.renderHealthPanel().includes('data-action="toggleIdealSolution"'), true);
   app.toggleIdealSolution();
   assert.equal(app.state.idealOpen, true);
   const panel = app.renderRightPanel();
@@ -1081,4 +1353,27 @@ const owner = { name: 'Neha Rao', email: 'neha@example.com' };
 
   assert.equal(app.state.comments.length, 1);
   assert.equal(app.state.comments[0].text, '');
+}
+
+{
+  const app = new SystemDesignStudio(root(), {
+    storage: storage(),
+    location: new URL('https://studio.example.test/'),
+    api: {},
+  });
+  app.state.screen = 'workspace';
+  app.state.comps = [{ id: 'api', type: 'API Service', cat: 'Compute', x: 100, y: 120 }];
+  app.state.edges = [{ id: 'edge-1', from: 'api', to: 'api', protocol: 'HTTP' }];
+  app.state.selectedId = 'api';
+  app.state.selectedEdgeId = 'edge-1';
+  const { target } = canvasTarget();
+
+  app.handleCanvasClick({
+    clientX: 240,
+    clientY: 180,
+    target,
+  });
+
+  assert.equal(app.state.selectedId, null);
+  assert.equal(app.state.selectedEdgeId, null);
 }

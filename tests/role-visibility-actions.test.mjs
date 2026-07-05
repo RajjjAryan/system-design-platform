@@ -24,18 +24,17 @@ const requiredSnippets = [
   'this.api.createInterview',
   'this.api.shareInterview',
   'clipboard.writeText',
+  'undoWorkspaceAction',
+  'redoWorkspaceAction',
+  'handleKeyUp',
+  'spacePan',
+  'resetView',
 ];
 
 for (const snippet of requiredSnippets) {
   assert.ok(source.includes(snippet), `Expected app source to include ${JSON.stringify(snippet)}`);
 }
 
-for (const tool of ['select', 'pan', 'connect', 'comment']) {
-  assert.ok(
-    source.includes(`data-action="tool" data-tool="${tool}"`),
-    `Expected workspace toolbar ${tool} button to have an action`,
-  );
-}
-
 assert.doesNotMatch(source, /Good afternoon, Aarav|Candidate: Priya S\.|systemdesign\.studio\/i\//);
 assert.doesNotMatch(source, /data-action="previewRole"|Candidate screen|Interviewer screen|rolePreview/);
+assert.doesNotMatch(source, /data-action="tool" data-tool="select"|data-action="zoomOut"|data-action="zoomIn"/);
